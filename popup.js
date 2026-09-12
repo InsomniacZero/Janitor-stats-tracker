@@ -59,14 +59,15 @@ function makePopupChart(title, color, sourcePoints) {
     started = true;
   });
 
-  const dots = valid.map(point => {
+  const pointsData = valid.map(point => {
     const index = sampled.indexOf(point);
-    const cx = x(index), cy = y(point.value);
-    const tooltip = makeTooltipMarkup({ label: title, point });
-    return `<circle tabindex="0" class="chart-point" cx="${cx}" cy="${cy}" r="3" fill="${color}" data-x="${cx}" data-y="${cy}" data-tooltip="${escapeHtml(tooltip)}"></circle>`;
-  }).join("");
+    const cx = x(index);
+    const cy = y(point.value);
+    const tooltipHtml = makeTooltipMarkup({ label: title, point, color });
+    return { cx, cy, tooltipHtml };
+  });
 
-  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(title)} graph">${grid}<path class="chart-line" d="${path.trim()}" stroke="${color}"/>${dots}</svg><div class="chart-tooltip" role="status"></div>`;
+  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${escapeHtml(JSON.stringify(pointsData))}" role="img" aria-label="${escapeHtml(title)} graph">${grid}<path class="chart-line" d="${path.trim()}" stroke="${color}"/><line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" /><circle class="chart-active-dot" cx="0" cy="0" r="4" fill="${color}" stroke="#181715" stroke-width="2" style="display: none;" /></svg><div class="chart-tooltip" role="status"></div>`;
 }
 
 function makePopupCombined(snapshots) {
@@ -97,9 +98,21 @@ function makePopupCombined(snapshots) {
     let path="",started=false;
     s.points.forEach((p,i)=>{ if(!Number.isFinite(p.value)){started=false;return;} path += `${started?'L':'M'}${x(i).toFixed(2)} ${y(p.value).toFixed(2)} `; started=true; });
     svg += `<path class="chart-line" stroke="${s.color}" d="${path.trim()}"/>`;
-    s.points.forEach((p,i)=>{ if(!Number.isFinite(p.value)) return; const cx=x(i),cy=y(p.value); const tooltip=makeTooltipMarkup({label:s.label,point:{...p,value:p.actual}}); svg += `<circle tabindex="0" class="chart-point" cx="${cx}" cy="${cy}" r="2.7" fill="${s.color}" data-x="${cx}" data-y="${cy}" data-tooltip="${escapeHtml(tooltip)}"></circle>`; });
   }
-  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Combined trend graph">${svg}</svg><div class="chart-tooltip" role="status"></div><div class="legend">${TRACKED_SERIES.map(s=>`<span class="legend-item"><span class="legend-dot" style="background:${s.color}"></span>${escapeHtml(s.short)}</span>`).join("")}</div>`;
+  const pointsData = sampled.map((sPoint, sIdx) => {
+    const cx = x(sIdx);
+    const dateStr = new Date(sPoint.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const rows = series.map(s => {
+      const p = s.points[sIdx];
+      if (!p || p.actual == null || !Number.isFinite(p.actual)) return "";
+      return `<div class="chart-tt-row"><span style="display:inline-flex;align-items:center;gap:4px;"><span class="chart-tt-indicator" style="background:${s.color};"></span><span>${escapeHtml(s.short)}</span></span><span style="font-weight:700;color:#faf8f5;">${escapeHtml(formatNumber(p.actual))}</span></div>`;
+    }).join("");
+    const tooltipHtml = `<div class="chart-tt-header"><span class="chart-tt-label">${escapeHtml(dateStr)}</span></div>${rows}`;
+    const primary = series[0]?.points[sIdx];
+    const cy = primary && Number.isFinite(primary.value) ? y(primary.value) : pad.top + innerH / 2;
+    return { cx, cy, tooltipHtml };
+  });
+  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${escapeHtml(JSON.stringify(pointsData))}" role="img" aria-label="Combined trend graph">${svg}<line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" /><circle class="chart-active-dot" cx="0" cy="0" r="4" fill="#d97757" stroke="#181715" stroke-width="2" style="display: none;" /></svg><div class="chart-tooltip" role="status"></div><div class="legend">${TRACKED_SERIES.map(s=>`<span class="legend-item"><span class="legend-dot" style="background:${s.color}"></span>${escapeHtml(s.short)}</span>`).join("")}</div>`;
 }
 
 function renderRangeControls() {

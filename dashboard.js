@@ -128,18 +128,51 @@ function makeSvgChart(title, color, sourcePoints, maxPoints = 800) {
     return `<line class="gridline" x1="${pad.left}" y1="${yy}" x2="${width - pad.right}" y2="${yy}"/><text class="axis-label" x="${pad.left - 10}" y="${yy + 4}" text-anchor="end">${escapeHtml(formatCompact(value))}</text>`;
   }).join("");
 
-  const path = chartPath(sampled, x, y);
-  const dots = valid.map(point => {
-    const cx = x(sampled.indexOf(point));
+  const linePath = chartPath(sampled, x, y);
+
+  // Area path below the line for subtle aesthetic depth
+  let areaPath = "";
+  if (valid.length > 1) {
+    const firstX = x(sampled.indexOf(valid[0]));
+    const lastX = x(sampled.indexOf(valid.at(-1)));
+    const baselineY = pad.top + innerH;
+    areaPath = `${linePath} L${lastX.toFixed(2)} ${baselineY.toFixed(2)} L${firstX.toFixed(2)} ${baselineY.toFixed(2)} Z`;
+  }
+
+  // Points metadata for crosshair hover tracking without dots
+  const pointsData = valid.map(point => {
+    const sampleIdx = sampled.indexOf(point);
+    const cx = x(sampleIdx);
     const cy = y(point.value);
-    const tooltip = pointTooltip(title, point);
-    return `<circle tabindex="0" class="chart-point" cx="${cx}" cy="${cy}" r="3.2" fill="${color}" data-x="${cx}" data-y="${cy}" data-tooltip="${escapeHtml(tooltip)}"></circle>`;
-  }).join("");
+    const tooltipHtml = makeTooltipMarkup({ label: title, point, color });
+    return { cx, cy, tooltipHtml };
+  });
+
+  const serializedPoints = escapeHtml(JSON.stringify(pointsData));
 
   const firstLabel = new Date(sampled[0].timestamp).toLocaleString([], { month: "short", day: "numeric" });
   const lastLabel = new Date(sampled.at(-1).timestamp).toLocaleString([], { month: "short", day: "numeric" });
 
-  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(title)} graph">${grid}<path class="chart-line" d="${path}" stroke="${color}"/>${dots}<text class="axis-label" x="${pad.left}" y="${height - 12}">${escapeHtml(firstLabel)}</text><text class="axis-label" x="${width - pad.right}" y="${height - 12}" text-anchor="end">${escapeHtml(lastLabel)}</text></svg><div class="chart-tooltip" role="status"></div>`;
+  const gradientId = `grad_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+
+  return `
+    <svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${serializedPoints}" role="img" aria-label="${escapeHtml(title)} graph">
+      <defs>
+        <linearGradient id="${gradientId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${color}" stop-opacity="0.28" />
+          <stop offset="100%" stop-color="${color}" stop-opacity="0.0" />
+        </linearGradient>
+      </defs>
+      ${grid}
+      ${areaPath ? `<path class="chart-area" d="${areaPath}" fill="url(#${gradientId})" />` : ""}
+      <path class="chart-line" d="${linePath}" stroke="${color}" />
+      <line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" />
+      <circle class="chart-active-dot" cx="0" cy="0" r="4.5" fill="${color}" stroke="#181715" stroke-width="2" style="display: none;" />
+      <text class="axis-label" x="${pad.left}" y="${height - 12}">${escapeHtml(firstLabel)}</text>
+      <text class="axis-label" x="${width - pad.right}" y="${height - 12}" text-anchor="end">${escapeHtml(lastLabel)}</text>
+    </svg>
+    <div class="chart-tooltip" role="status"></div>
+  `;
 }
 
 function makeCombinedChart(snapshots) {
@@ -187,12 +220,13 @@ function makeCombinedChart(snapshots) {
   const x = i => sampled.length <= 1 ? pad.left + innerW / 2 : i / (sampled.length - 1) * innerW + pad.left;
   const y = value => pad.top + (1 - (value - yMin) / (yMax - yMin || 1)) * innerH;
 
-  let svg = [0, .25, .5, .75, 1].map(t => {
+  let grid = [0, .25, .5, .75, 1].map(t => {
     const yy = pad.top + t * innerH;
     const value = yMax - t * (yMax - yMin);
     return `<line class="gridline" x1="${pad.left}" y1="${yy}" x2="${width - pad.right}" y2="${yy}"/><text class="axis-label" x="${pad.left - 10}" y="${yy + 4}" text-anchor="end">${Math.round(value)}</text>`;
   }).join("");
 
+  let linesSvg = "";
   series.forEach(seriesInfo => {
     const valid = seriesInfo.points.filter(p => Number.isFinite(p.value));
     let path = "";
@@ -203,23 +237,64 @@ function makeCombinedChart(snapshots) {
       path += `${command}${x(sampleIndex).toFixed(2)} ${y(point.value).toFixed(2)} `;
       started = true;
     });
-    svg += `<path class="chart-line" d="${path.trim()}" stroke="${seriesInfo.color}"/>`;
-    valid.forEach(point => {
-      const sampleIndex = sampled.findIndex(p => p.originalIndex === point.originalIndex);
-      const cx = x(sampleIndex);
-      const cy = y(point.value);
-      const tooltip = makeTooltipMarkup({ label: seriesInfo.label, point: { ...point, value: point.actual } });
-      svg += `<circle tabindex="0" class="chart-point" cx="${cx}" cy="${cy}" r="3" fill="${seriesInfo.color}" data-x="${cx}" data-y="${cy}" data-tooltip="${escapeHtml(tooltip)}"></circle>`;
-    });
+    linesSvg += `<path class="chart-line" d="${path.trim()}" stroke="${seriesInfo.color}"/>`;
   });
 
-  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Combined trend graph">${svg}</svg><div class="chart-tooltip" role="status"></div>`;
+  // Build multi-series snapshot points data for crosshair
+  const pointsData = sampled.map((sPoint, sIdx) => {
+    const cx = x(sIdx);
+    const dateStr = new Date(sPoint.timestamp).toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+
+    const rows = series.map(s => {
+      const p = s.points[sIdx];
+      if (!p || p.actual == null || !Number.isFinite(p.actual)) return "";
+      const deltaStr = p.delta != null ? ` (${p.delta >= 0 ? "+" : ""}${formatNumber(p.delta)})` : "";
+      return `
+        <div class="chart-tt-row">
+          <span style="display:inline-flex;align-items:center;gap:4px;">
+            <span class="chart-tt-indicator" style="background:${s.color};"></span>
+            <span>${escapeHtml(s.short)}</span>
+          </span>
+          <span style="font-weight:700;color:#faf8f5;">${escapeHtml(formatNumber(p.actual))}${deltaStr}</span>
+        </div>
+      `;
+    }).join("");
+
+    const tooltipHtml = `
+      <div class="chart-tt-header">
+        <span class="chart-tt-label">${escapeHtml(dateStr)}</span>
+      </div>
+      ${rows}
+    `;
+
+    const primarySeries = series[0]?.points[sIdx];
+    const cy = primarySeries && Number.isFinite(primarySeries.value) ? y(primarySeries.value) : pad.top + innerH / 2;
+
+    return { cx, cy, tooltipHtml };
+  });
+
+  const serializedPoints = escapeHtml(JSON.stringify(pointsData));
+
+  return `
+    <svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${serializedPoints}" role="img" aria-label="Combined normalized trend graph">
+      ${grid}
+      ${linesSvg}
+      <line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" />
+      <circle class="chart-active-dot" cx="0" cy="0" r="4.5" fill="#d97757" stroke="#181715" stroke-width="2" style="display: none;" />
+    </svg>
+    <div class="chart-tooltip" role="status"></div>
+  `;
 }
 
 function renderRangeControls() {
   const target = document.getElementById("rangeControls");
   if (!target) return;
-  target.innerHTML = Object.entries(RANGE_CONFIG).map(([id, config]) => `<button class="range-btn ${state.range === id ? "active" : ""}" data-range="${id}" data-tooltip="Filter growth window to past ${config.label}">${config.label}</button>`).join("");
+  target.innerHTML = Object.entries(RANGE_CONFIG).map(([id, config]) => `<button class="range-btn ${state.range === id ? "active" : ""}" data-range="${id}">${config.label}</button>`).join("");
   target.querySelectorAll(".range-btn").forEach(button => {
     button.addEventListener("click", () => {
       state.range = button.dataset.range;
@@ -244,7 +319,7 @@ function renderCards() {
       ? `${sign}${formatNumber(delta)} ${percent == null ? "" : `(${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%)`} over ${formatDuration(stats.durationMs)}`.trim()
       : "Need at least two samples";
     const cls = delta == null ? "" : delta >= 0 ? "up" : "down";
-    return `<article class="stat-card"><div class="stat-label">${escapeHtml(seriesInfo.label)}</div><div class="stat-value">${formatCompact(value)}</div><div class="stat-change ${cls}">${escapeHtml(growth)}</div><div class="stat-secondary">Rate: ${escapeHtml(formatRate(stats?.perHour))}</div></article>`;
+    return `<article class="stat-card"><div class="stat-label">${escapeHtml(seriesInfo.label)}</div><div class="stat-value">${formatNumber(value)}</div><div class="stat-change ${cls}">${escapeHtml(growth)}</div><div class="stat-secondary">Rate: ${escapeHtml(formatRate(stats?.perHour))}</div></article>`;
   }).join("");
 }
 
@@ -254,13 +329,43 @@ function renderInsights() {
   const container = document.getElementById("insights");
   if (!container) return;
 
+  const chats = latest?.chats;
+  const msgs = latest?.msgs;
+  const comments = latest?.comments;
+  const favs = latest?.favourites;
+  const pubChats = latest?.publishedChats;
+
+  const msgsPerChat = Number.isFinite(msgs) && Number.isFinite(chats) && chats > 0
+    ? (msgs / chats).toFixed(2)
+    : null;
+
+  const favRate = Number.isFinite(favs) && Number.isFinite(chats) && chats > 0
+    ? `${((favs / chats) * 100).toFixed(2)}%`
+    : null;
+
+  const msgsPerFav = Number.isFinite(favs) && Number.isFinite(msgs) && favs > 0
+    ? `1 : ${Math.round(msgs / favs).toLocaleString()}`
+    : null;
+
+  const commentsPer1kChats = Number.isFinite(comments) && Number.isFinite(chats) && chats > 0
+    ? ((comments / chats) * 1000).toFixed(1)
+    : null;
+
+  const chatsPer1kMsgs = Number.isFinite(chats) && Number.isFinite(msgs) && msgs > 0
+    ? ((chats / msgs) * 1000).toFixed(1)
+    : null;
+
+  const pubShare = Number.isFinite(pubChats) && Number.isFinite(chats) && chats > 0
+    ? `${((pubChats / chats) * 100).toFixed(1)}%`
+    : null;
+
   const pairs = [
-    ["Messages / chat", ratio(latest?.msgs, latest?.chats), "messages per chat"],
-    ["Chats / 1k messages", Number.isFinite(latest?.chats) && Number.isFinite(latest?.msgs) && latest.msgs > 0 ? latest.chats / latest.msgs * 1000 : null, "chats per 1,000 messages"],
-    ["Comments / 1k chats", Number.isFinite(latest?.comments) && Number.isFinite(latest?.chats) && latest.chats > 0 ? latest.comments / latest.chats * 1000 : null, "comments per 1,000 chats"],
-    ["Favourites / 1k chats", Number.isFinite(latest?.favourites) && Number.isFinite(latest?.chats) && latest.chats > 0 ? latest.favourites / latest.chats * 1000 : null, "favourites per 1,000 chats"],
-    ["Favourites / 1k messages", Number.isFinite(latest?.favourites) && Number.isFinite(latest?.msgs) && latest.msgs > 0 ? latest.favourites / latest.msgs * 1000 : null, "favourites per 1,000 messages"],
-    ["Comments / 1k messages", Number.isFinite(latest?.comments) && Number.isFinite(latest?.msgs) && latest.msgs > 0 ? latest.comments / latest.msgs * 1000 : null, "comments per 1,000 messages"]
+    ["Messages / Chat", msgsPerChat, "Average conversation depth"],
+    ["Fave / Chat Rate", favRate, "Favourites per 100 chats"],
+    ["Faves to Messages", msgsPerFav, "Ratio of faves per messages"],
+    ["Comments / 1k Chats", commentsPer1kChats, "Comments per 1,000 chats"],
+    ["Chats / 1k Messages", chatsPer1kMsgs, "New chats per 1,000 messages"],
+    ...(pubShare ? [["Public Chat Share", pubShare, "Public vs total conversations"]] : [["Comments / 1k Msgs", Number.isFinite(comments) && Number.isFinite(msgs) && msgs > 0 ? ((comments / msgs) * 1000).toFixed(1) : null, "Comments per 1,000 messages"]])
   ];
 
   const duration = getWindowStats(windowSnapshots, "msgs")?.durationMs ?? 0;
@@ -269,7 +374,7 @@ function renderInsights() {
     return `<div class="insight-mini"><div class="insight-mini-label">${escapeHtml(seriesInfo.short)} growth</div><div class="insight-mini-value">${stats ? `${stats.delta >= 0 ? "+" : ""}${formatNumber(stats.delta)}` : "—"}</div><div class="insight-mini-sub">${stats?.percent == null ? "Percent unavailable" : `${stats.percent >= 0 ? "+" : ""}${stats.percent.toFixed(2)}% over ${formatDuration(stats.durationMs)}`}</div></div>`;
   }).join("");
 
-  const ratioHtml = pairs.map(([label, value, sub]) => `<div class="insight-mini"><div class="insight-mini-label">${escapeHtml(label)}</div><div class="insight-mini-value">${value == null ? "—" : escapeHtml(formatCompact(value))}</div><div class="insight-mini-sub">${escapeHtml(sub)}</div></div>`).join("");
+  const ratioHtml = pairs.map(([label, value, sub]) => `<div class="insight-mini"><div class="insight-mini-label">${escapeHtml(label)}</div><div class="insight-mini-value">${value == null ? "—" : escapeHtml(value)}</div><div class="insight-mini-sub">${escapeHtml(sub)}</div></div>`).join("");
   const totalDuration = windowSnapshots.length > 1 ? formatDuration(duration) : "—";
 
   container.innerHTML = `
@@ -316,7 +421,6 @@ function render() {
   const insightsEl = document.getElementById("insights");
   const chartsEl = document.getElementById("charts");
   const metaEl = document.getElementById("meta");
-  const footerEl = document.getElementById("footer");
 
   if (!character) {
     if (titleEl) titleEl.textContent = "Welcome to JanitorAI Stats Tracker";
@@ -345,7 +449,6 @@ function render() {
         </div>
       </article>`;
     if (metaEl) metaEl.innerHTML = "";
-    if (footerEl) footerEl.textContent = "";
 
     document.getElementById("emptyDemoBtn")?.addEventListener("click", loadSampleData);
     document.getElementById("emptyAddBtn")?.addEventListener("click", openEntryModal);
@@ -360,9 +463,6 @@ function render() {
   renderCards();
   renderInsights();
   renderCharts();
-  if (footerEl) {
-    footerEl.textContent = `Data is saved securely in your browser's IndexedDB. Graphs automatically filter out transient hydration glitches while preserving all raw samples.`;
-  }
 }
 
 function populateCharacterSelect() {
@@ -619,10 +719,7 @@ function setupEventListeners() {
 }
 
 function showNotice(text) {
-  const notice = document.getElementById("notice");
-  if (!notice) return;
-  notice.textContent = text;
-  notice.style.display = "block";
+  showToast(text);
 }
 
 function openEntryModal() {
@@ -1044,7 +1141,32 @@ async function loadSampleData() {
   showNotice("Loaded sample character data: Lyra // Cyberpunk Archivist (72 hourly snapshots).");
 }
 
+function setupScrollAnimations() {
+  const elements = document.querySelectorAll(".reveal-on-scroll");
+  if (!elements.length) return;
+
+  if (!("IntersectionObserver" in window)) {
+    elements.forEach(el => el.classList.add("is-revealed"));
+    return;
+  }
+
+  const observer = new IntersectionObserver((entries, obs) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add("is-revealed");
+        obs.unobserve(entry.target);
+      }
+    });
+  }, {
+    threshold: 0.08,
+    rootMargin: "0px 0px -40px 0px"
+  });
+
+  elements.forEach(el => observer.observe(el));
+}
+
 setupEventListeners();
+setupScrollAnimations();
 
 let refreshTimer = null;
 async function refreshLoop() {

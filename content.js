@@ -33,10 +33,10 @@ function getMessagesAndChats() {
   if (!ribbon) return { msgs: null, msgsDisplay: null, chats: null, chatsDisplay: null };
   const values = [...ribbon.querySelectorAll("p")].map(el => cleanDisplay(el.textContent)).filter(Boolean);
   return {
-    msgs: parseStat(values[0]),
-    msgsDisplay: values[0] ?? null,
-    chats: parseStat(values[1]),
-    chatsDisplay: values[1] ?? null
+    chats: parseStat(values[0]),
+    chatsDisplay: values[0] ?? null,
+    msgs: parseStat(values[1]),
+    msgsDisplay: values[1] ?? null
   };
 }
 
