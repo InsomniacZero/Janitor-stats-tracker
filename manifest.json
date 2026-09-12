@@ -11,7 +11,8 @@
   ],
   "host_permissions": [
     "https://janitorai.com/*",
-    "https://www.janitorai.com/*"
+    "https://www.janitorai.com/*",
+    "https://*.supabase.co/*"
   ],
   "background": {
     "service_worker": "background.js",

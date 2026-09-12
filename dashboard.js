@@ -30,6 +30,20 @@ import {
   clearDatabase
 } from "./db.js";
 
+import {
+  getSupabaseConfig,
+  setSupabaseConfig,
+  clearSupabaseConfig,
+  testSupabaseConnection,
+  fetchTrackedJobs,
+  saveTrackedJob,
+  deleteTrackedJob,
+  insertSnapshot,
+  fetchCharacterSnapshots,
+  subscribeToRealtimeSnapshots,
+  SCHEMA_SQL
+} from "./supabase.js";
+
 const isExtension = typeof chrome !== "undefined" && Boolean(chrome?.storage?.local);
 
 const storage = {
@@ -74,6 +88,10 @@ let state = {
   snapshots: [],
   range: "24h"
 };
+
+let trackedJobs = [];
+let realtimeUnsubscribe = null;
+let countdownTimer = null;
 
 function getCurrent() {
   return state.characters.find(c => c.characterId === state.activeCharacterId) || state.characters[0] || null;
@@ -569,15 +587,179 @@ function setupStepperControls() {
   });
 }
 
+function setupRealtimeListener(characterId) {
+  if (realtimeUnsubscribe) {
+    realtimeUnsubscribe();
+    realtimeUnsubscribe = null;
+  }
+  if (!characterId) return;
+
+  realtimeUnsubscribe = subscribeToRealtimeSnapshots(characterId, (newSnapshot) => {
+    if (!newSnapshot || newSnapshot.characterId !== state.activeCharacterId) return;
+
+    // Avoid duplicate insertions
+    const exists = state.snapshots.some(s => s.timestamp === newSnapshot.timestamp);
+    if (exists) return;
+
+    state.snapshots.push(newSnapshot);
+    state.snapshots.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+    render();
+    showToast(`Received 1m live snapshot for ${getCurrent()?.characterName || 'character'}.`, "info");
+  });
+}
+
+function renderTrackingCountdown() {
+  const pill = document.getElementById("trackingPill");
+  if (!pill) return;
+
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+
+  const char = getCurrent();
+  if (!char) {
+    pill.style.display = "none";
+    return;
+  }
+
+  const job = trackedJobs.find(j => (j.character_id || j.characterId) === char.characterId);
+  if (!job || !job.expires_at) {
+    pill.style.display = "none";
+    return;
+  }
+
+  const updateCountdown = () => {
+    const expiresMs = new Date(job.expires_at).getTime();
+    const nowMs = Date.now();
+    const diffMs = expiresMs - nowMs;
+
+    if (diffMs > 0 && job.status === "active") {
+      const totalHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const totalMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+      pill.className = "tracking-pill";
+      pill.style.display = "inline-flex";
+      pill.innerHTML = `
+        <span class="tracking-pulse-dot"></span>
+        <span><strong>72h Tracker:</strong> ${totalHours}h ${totalMins}m remaining • 1m interval</span>
+      `;
+    } else {
+      pill.className = "tracking-pill is-completed";
+      pill.style.display = "inline-flex";
+      pill.innerHTML = `
+        <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2;"><path d="M20 6 9 17l-5-5"/></svg>
+        <span>72h Tracking Finished • Data permanently saved in Supabase</span>
+      `;
+    }
+  };
+
+  updateCountdown();
+  countdownTimer = setInterval(updateCountdown, 30000);
+}
+
+async function updateCloudSyncIndicator() {
+  const dot = document.getElementById("syncStatusDot");
+  const label = document.getElementById("syncBtnLabel");
+  const btn = document.getElementById("cloudSyncBtn");
+  if (!dot || !label || !btn) return;
+
+  const config = await getSupabaseConfig();
+  if (!config) {
+    dot.className = "sync-status-dot";
+    label.textContent = "Cloud Sync";
+    btn.setAttribute("data-tooltip", "Connect Supabase ($0 Cloud Storage & 3-Day Tracker)");
+    return;
+  }
+
+  dot.className = "sync-status-dot is-connected";
+  label.textContent = "Cloud Sync";
+  btn.setAttribute("data-tooltip", "Supabase Connected • 100% Free Cloud Storage Active");
+}
+
 async function load() {
-  state.characters = (await getAllCharacters()).sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""));
+  // 1. Fetch local characters
+  const localCharacters = await getAllCharacters();
+  const charMap = new Map();
+  for (const c of localCharacters) {
+    charMap.set(c.characterId, c);
+  }
+
+  // 2. Fetch Supabase tracked jobs if connected
+  try {
+    const supabaseJobs = await fetchTrackedJobs();
+    if (supabaseJobs && supabaseJobs.length > 0) {
+      trackedJobs = supabaseJobs;
+      for (const job of supabaseJobs) {
+        if (!charMap.has(job.character_id)) {
+          charMap.set(job.character_id, {
+            characterId: job.character_id,
+            characterName: job.character_name,
+            url: job.url,
+            createdAt: job.created_at,
+            lastSeen: job.last_scraped_at
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("JStats: could not load Supabase tracked jobs", err);
+  }
+
+  // 3. Fallback to local tracked jobs
+  if (isExtension && chrome?.storage?.local) {
+    try {
+      const localStore = await chrome.storage.local.get("trackedJobs");
+      const localJobs = localStore.trackedJobs || {};
+      for (const [id, job] of Object.entries(localJobs)) {
+        if (!trackedJobs.some(j => (j.character_id || j.characterId) === id)) {
+          trackedJobs.push(job);
+        }
+        if (!charMap.has(id)) {
+          charMap.set(id, {
+            characterId: id,
+            characterName: job.character_name,
+            url: job.url,
+            lastSeen: job.last_scraped_at
+          });
+        }
+      }
+    } catch {}
+  }
+
+  state.characters = Array.from(charMap.values()).sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""));
   const settings = await storage.get({ activeCharacterId: null });
   state.activeCharacterId = state.characters.some(c => c.characterId === settings.activeCharacterId)
     ? settings.activeCharacterId
     : state.characters[0]?.characterId || null;
+
   populateCharacterSelect();
   const character = getCurrent();
-  state.snapshots = character ? await getSnapshots(character.characterId) : [];
+
+  // 4. Fetch snapshots for active character
+  if (character) {
+    let snaps = [];
+    const config = await getSupabaseConfig();
+    if (config) {
+      snaps = await fetchCharacterSnapshots(character.characterId);
+    }
+    if (!snaps || snaps.length === 0) {
+      snaps = await getSnapshots(character.characterId);
+    }
+    state.snapshots = snaps || [];
+  } else {
+    state.snapshots = [];
+  }
+
+  // 5. Connect Realtime WebSocket listener
+  setupRealtimeListener(state.activeCharacterId);
+
+  // 6. Update tracking countdown indicator
+  renderTrackingCountdown();
+
+  // 7. Update cloud sync status
+  await updateCloudSyncIndicator();
+
   render();
 }
 
@@ -651,6 +833,7 @@ function setupEventListeners() {
       confirmText: "Delete Data",
       onConfirm: async () => {
         await deleteCharacter(character.characterId);
+        await deleteTrackedJob(character.characterId);
         const remaining = (await getAllCharacters()).sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""));
         await storage.set({ activeCharacterId: remaining[0]?.characterId || null });
         await load();
@@ -698,6 +881,33 @@ function setupEventListeners() {
     fileInput.addEventListener("change", handleCsvUpload);
   }
 
+  // Track Bot URL Modal
+  document.getElementById("trackUrlBtn")?.addEventListener("click", openTrackModal);
+  document.getElementById("closeTrackModalBtn")?.addEventListener("click", closeTrackModal);
+  document.getElementById("cancelTrackModalBtn")?.addEventListener("click", closeTrackModal);
+  document.getElementById("trackModalOverlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "trackModalOverlay") closeTrackModal();
+  });
+  document.getElementById("trackUrlInput")?.addEventListener("input", updateTrackUrlHelper);
+  document.getElementById("trackUrlInput")?.addEventListener("change", updateTrackUrlHelper);
+  document.getElementById("trackUrlForm")?.addEventListener("submit", handleTrackUrlSubmit);
+
+  // Supabase Cloud Sync Modal
+  document.getElementById("cloudSyncBtn")?.addEventListener("click", openSupabaseModal);
+  document.getElementById("closeSupabaseModalBtn")?.addEventListener("click", closeSupabaseModal);
+  document.getElementById("cancelSupabaseModalBtn")?.addEventListener("click", closeSupabaseModal);
+  document.getElementById("supabaseModalOverlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "supabaseModalOverlay") closeSupabaseModal();
+  });
+  document.getElementById("supabaseConfigForm")?.addEventListener("submit", handleSupabaseConfigSubmit);
+  document.getElementById("disconnectSupabaseBtn")?.addEventListener("click", handleDisconnectSupabase);
+  document.getElementById("copySchemaBtn")?.addEventListener("click", handleCopySchemaSql);
+  document.getElementById("toggleKeyVisibility")?.addEventListener("click", () => {
+    const input = document.getElementById("supabaseAnonKeyInput");
+    if (!input) return;
+    input.type = input.type === "password" ? "text" : "password";
+  });
+
   // Modal event listeners
   document.getElementById("closeModalBtn")?.addEventListener("click", closeEntryModal);
   document.getElementById("cancelModalBtn")?.addEventListener("click", closeEntryModal);
@@ -712,9 +922,207 @@ function setupEventListeners() {
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       closeEntryModal();
+      closeTrackModal();
+      closeSupabaseModal();
       const confirmModal = document.getElementById("confirmModalOverlay");
       if (confirmModal) confirmModal.classList.remove("open");
     }
+  });
+}
+
+function openTrackModal() {
+  const modal = document.getElementById("trackModalOverlay");
+  if (!modal) return;
+  modal.classList.add("open");
+  const urlInput = document.getElementById("trackUrlInput");
+  if (urlInput) {
+    urlInput.value = "";
+    urlInput.focus();
+  }
+  const helper = document.getElementById("parsedUuidDisplay");
+  if (helper) {
+    helper.textContent = "Paste full character URL or UUID";
+    helper.style.color = "var(--color-text-muted)";
+  }
+}
+
+function closeTrackModal() {
+  const modal = document.getElementById("trackModalOverlay");
+  if (modal) modal.classList.remove("open");
+}
+
+function updateTrackUrlHelper() {
+  const urlInput = document.getElementById("trackUrlInput");
+  const helper = document.getElementById("parsedUuidDisplay");
+  if (!urlInput || !helper) return;
+
+  const val = urlInput.value.trim();
+  if (!val) {
+    helper.textContent = "Paste full character URL or UUID";
+    helper.style.color = "var(--color-text-muted)";
+    return;
+  }
+
+  const match = val.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  if (match) {
+    helper.textContent = `✓ Detected UUID: ${match[1]}`;
+    helper.style.color = "var(--color-info)";
+  } else {
+    helper.textContent = "Please enter a valid JanitorAI character URL or UUID.";
+    helper.style.color = "var(--color-warning)";
+  }
+}
+
+async function handleTrackUrlSubmit(e) {
+  e.preventDefault();
+  const urlInput = document.getElementById("trackUrlInput");
+  const durationSelect = document.getElementById("trackDurationSelect");
+  const customNameInput = document.getElementById("trackCustomName");
+
+  const url = urlInput?.value.trim();
+  if (!url) return;
+
+  const match = url.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  const characterId = match ? match[1] : url.replace(/.*\/characters\//i, "").split(/[/?#]/)[0];
+
+  if (!characterId) {
+    showToast("Could not find a valid character ID or UUID in this link.", "error");
+    return;
+  }
+
+  const durationHours = Number(durationSelect?.value) || 72;
+  const characterName = customNameInput?.value.trim() || "JanitorAI Character";
+
+  showToast(`Starting ${durationHours}h autonomous tracker for character...`, "info");
+
+  if (isExtension && chrome?.runtime?.sendMessage) {
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        type: "TRACK_NEW_URL",
+        payload: { url, durationHours, characterName }
+      });
+      if (resp?.ok) {
+        await storage.set({ activeCharacterId: characterId });
+        closeTrackModal();
+        await load();
+        showToast(`Autonomous ${durationHours}h scraper active! Polling every 1 minute.`, "success");
+        return;
+      }
+    } catch (err) {
+      console.warn("Extension message error, registering directly", err);
+    }
+  }
+
+  // Direct Supabase / Web fallback
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + durationHours * 3600 * 1000).toISOString();
+  const job = {
+    character_id: characterId,
+    character_name: characterName,
+    url: url.startsWith("http") ? url : `https://janitorai.com/characters/${characterId}`,
+    started_at: now.toISOString(),
+    expires_at: expiresAt,
+    status: "active",
+    last_scraped_at: now.toISOString()
+  };
+
+  await saveTrackedJob(job);
+  await storage.set({ activeCharacterId: characterId });
+  closeTrackModal();
+  await load();
+  showToast(`Registered ${durationHours}h tracking job in Supabase!`, "success");
+}
+
+async function openSupabaseModal() {
+  const modal = document.getElementById("supabaseModalOverlay");
+  if (!modal) return;
+  modal.classList.add("open");
+
+  const urlInput = document.getElementById("supabaseUrlInput");
+  const keyInput = document.getElementById("supabaseAnonKeyInput");
+  const banner = document.getElementById("cloudStatusBanner");
+  const text = document.getElementById("modalStatusText");
+
+  const config = await getSupabaseConfig();
+  if (config) {
+    if (urlInput) urlInput.value = config.url || "";
+    if (keyInput) keyInput.value = config.anonKey || "";
+    if (text) text.textContent = "Testing connection...";
+    const test = await testSupabaseConnection(config.url, config.anonKey);
+    if (test.ok) {
+      banner.className = "cloud-status-banner is-connected";
+      if (text) text.textContent = "Connected to Supabase PostgreSQL (Ready)";
+    } else {
+      banner.className = "cloud-status-banner is-error";
+      if (text) text.textContent = `Connection error: ${test.error || "Check credentials"}`;
+    }
+  } else {
+    if (urlInput) urlInput.value = "";
+    if (keyInput) keyInput.value = "";
+    banner.className = "cloud-status-banner";
+    if (text) text.textContent = "Supabase not configured (Local Mode)";
+  }
+}
+
+function closeSupabaseModal() {
+  const modal = document.getElementById("supabaseModalOverlay");
+  if (modal) modal.classList.remove("open");
+}
+
+async function handleSupabaseConfigSubmit(e) {
+  e.preventDefault();
+  const urlInput = document.getElementById("supabaseUrlInput");
+  const keyInput = document.getElementById("supabaseAnonKeyInput");
+  const banner = document.getElementById("cloudStatusBanner");
+  const text = document.getElementById("modalStatusText");
+
+  const url = urlInput?.value.trim();
+  const anonKey = keyInput?.value.trim();
+
+  if (!url || !anonKey) {
+    showToast("Please enter both Supabase URL and Anon Key.", "warning");
+    return;
+  }
+
+  if (text) text.textContent = "Testing connection...";
+  const test = await testSupabaseConnection(url, anonKey);
+  if (!test.ok) {
+    banner.className = "cloud-status-banner is-error";
+    if (text) text.textContent = `Connection failed: ${test.error}`;
+    showToast(`Supabase Error: ${test.error}`, "error");
+    return;
+  }
+
+  await setSupabaseConfig(url, anonKey);
+  banner.className = "cloud-status-banner is-connected";
+  if (text) text.textContent = "Successfully connected to Supabase!";
+  showToast("Supabase cloud database connected successfully!", "success");
+  closeSupabaseModal();
+  await load();
+}
+
+async function handleDisconnectSupabase() {
+  await clearSupabaseConfig();
+  const banner = document.getElementById("cloudStatusBanner");
+  const text = document.getElementById("modalStatusText");
+  const urlInput = document.getElementById("supabaseUrlInput");
+  const keyInput = document.getElementById("supabaseAnonKeyInput");
+
+  if (urlInput) urlInput.value = "";
+  if (keyInput) keyInput.value = "";
+  if (banner) banner.className = "cloud-status-banner";
+  if (text) text.textContent = "Disconnected (Local Mode)";
+
+  showToast("Disconnected Supabase. Running in local storage mode.", "info");
+  closeSupabaseModal();
+  await load();
+}
+
+function handleCopySchemaSql() {
+  navigator.clipboard.writeText(SCHEMA_SQL).then(() => {
+    showToast("schema.sql copied to clipboard! Paste into Supabase SQL Editor.", "success");
+  }).catch(() => {
+    showToast("Could not access clipboard. schema.sql is available in your project directory.", "warning");
   });
 }
 
