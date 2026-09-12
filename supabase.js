@@ -4,13 +4,23 @@
  * Fully compatible with Vercel Web, Vite, and Chrome MV3 Extension environments.
  */
 
+export const DEFAULT_SUPABASE_URL = "https://vclvynlyfylnjcjvyrfy.supabase.co";
+export const DEFAULT_SUPABASE_ANON_KEY = "sb_publishable_zQ5xfP0Ok8sV6tCVAqLQbQ_EWpAOs7G";
+
+function cleanUrl(raw) {
+  return (raw || "")
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\/rest\/v1\/?$/, "");
+}
+
 export async function getSupabaseConfig() {
   try {
     if (typeof chrome !== "undefined" && chrome.storage?.local) {
       const res = await chrome.storage.local.get(["supabaseUrl", "supabaseAnonKey"]);
       if (res.supabaseUrl && res.supabaseAnonKey) {
         return {
-          url: res.supabaseUrl.trim().replace(/\/+$/, ""),
+          url: cleanUrl(res.supabaseUrl),
           anonKey: res.supabaseAnonKey.trim()
         };
       }
@@ -25,7 +35,7 @@ export async function getSupabaseConfig() {
       const anonKey = localStorage.getItem("jstats_supabase_anon_key");
       if (url && anonKey) {
         return {
-          url: url.trim().replace(/\/+$/, ""),
+          url: cleanUrl(url),
           anonKey: anonKey.trim()
         };
       }
@@ -34,16 +44,24 @@ export async function getSupabaseConfig() {
     // Storage access unavailable
   }
 
+  // Pre-configured default project
+  if (DEFAULT_SUPABASE_URL && DEFAULT_SUPABASE_ANON_KEY) {
+    return {
+      url: cleanUrl(DEFAULT_SUPABASE_URL),
+      anonKey: DEFAULT_SUPABASE_ANON_KEY.trim()
+    };
+  }
+
   return null;
 }
 
 export async function setSupabaseConfig(url, anonKey) {
-  const cleanUrl = (url || "").trim().replace(/\/+$/, "");
+  const normalizedUrl = cleanUrl(url);
   const cleanKey = (anonKey || "").trim();
 
   try {
     if (typeof chrome !== "undefined" && chrome.storage?.local) {
-      await chrome.storage.local.set({ supabaseUrl: cleanUrl, supabaseAnonKey: cleanKey });
+      await chrome.storage.local.set({ supabaseUrl: normalizedUrl, supabaseAnonKey: cleanKey });
     }
   } catch {
     // Non-extension context
@@ -51,7 +69,7 @@ export async function setSupabaseConfig(url, anonKey) {
 
   try {
     if (typeof localStorage !== "undefined") {
-      localStorage.setItem("jstats_supabase_url", cleanUrl);
+      localStorage.setItem("jstats_supabase_url", normalizedUrl);
       localStorage.setItem("jstats_supabase_anon_key", cleanKey);
     }
   } catch {

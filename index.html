@@ -20,8 +20,8 @@
           <span class="brand-title">JStats</span>
         </div>
         <div class="actions">
-          <button class="btn btn-secondary cloud-sync-btn" id="cloudSyncBtn" data-tooltip="Supabase Cloud Sync Settings">
-            <span class="sync-status-dot" id="syncStatusDot"></span>
+          <button class="btn btn-secondary cloud-sync-btn" id="cloudSyncBtn" data-tooltip="Supabase Connected • 100% Free Cloud Storage Active">
+            <span class="sync-status-dot is-connected" id="syncStatusDot"></span>
             <svg viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
             <span id="syncBtnLabel">Cloud Sync</span>
           </button>
@@ -301,9 +301,9 @@
         <button class="modal-close" id="closeSupabaseModalBtn" aria-label="Close">&times;</button>
       </div>
 
-      <div class="cloud-status-banner" id="cloudStatusBanner">
+      <div class="cloud-status-banner is-connected" id="cloudStatusBanner">
         <span class="status-indicator-dot" id="modalStatusDot"></span>
-        <span id="modalStatusText">Checking connection...</span>
+        <span id="modalStatusText">Connected to Supabase PostgreSQL (Ready)</span>
       </div>
 
       <form id="supabaseConfigForm" class="modal-form">
@@ -312,6 +312,7 @@
           <input 
             type="url" 
             id="supabaseUrlInput" 
+            value="https://vclvynlyfylnjcjvyrfy.supabase.co"
             placeholder="https://xyzprojectid.supabase.co" 
             required 
             autocomplete="off"
@@ -326,6 +327,7 @@
             <input 
               type="password" 
               id="supabaseAnonKeyInput" 
+              value="sb_publishable_zQ5xfP0Ok8sV6tCVAqLQbQ_EWpAOs7G"
               placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." 
               required 
               autocomplete="off"
