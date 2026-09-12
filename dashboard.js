@@ -219,7 +219,7 @@ function makeCombinedChart(snapshots) {
 function renderRangeControls() {
   const target = document.getElementById("rangeControls");
   if (!target) return;
-  target.innerHTML = Object.entries(RANGE_CONFIG).map(([id, config]) => `<button class="range-btn ${state.range === id ? "active" : ""}" data-range="${id}">${config.label}</button>`).join("");
+  target.innerHTML = Object.entries(RANGE_CONFIG).map(([id, config]) => `<button class="range-btn ${state.range === id ? "active" : ""}" data-range="${id}" data-tooltip="Filter growth window to past ${config.label}">${config.label}</button>`).join("");
   target.querySelectorAll(".range-btn").forEach(button => {
     button.addEventListener("click", () => {
       state.range = button.dataset.range;
@@ -539,21 +539,31 @@ function setupEventListeners() {
 
   document.getElementById("addBtn")?.addEventListener("click", openEntryModal);
 
-  document.getElementById("clearBtn")?.addEventListener("click", async () => {
+  document.getElementById("clearBtn")?.addEventListener("click", () => {
     const character = getCurrent();
-    if (!character) return;
-    if (!confirm(`Delete all stored history for ${character.characterName}?`)) return;
-    await deleteCharacter(character.characterId);
-    const remaining = (await getAllCharacters()).sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""));
-    await storage.set({ activeCharacterId: remaining[0]?.characterId || null });
-    await load();
-    showNotice(`Deleted character ${character.characterName}.`);
+    if (!character) {
+      showToast("No active character selected to clear.", "info");
+      return;
+    }
+    openConfirmModal({
+      title: "Delete Character History",
+      message: `Are you sure you want to permanently delete all snapshot data for <strong>${escapeHtml(character.characterName)}</strong>? This action cannot be undone.`,
+      confirmText: "Delete Data",
+      onConfirm: async () => {
+        await deleteCharacter(character.characterId);
+        const remaining = (await getAllCharacters()).sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""));
+        await storage.set({ activeCharacterId: remaining[0]?.characterId || null });
+        await load();
+        showToast(`Deleted history for ${character.characterName}.`, "info");
+        showNotice(`Deleted character ${character.characterName}.`);
+      }
+    });
   });
 
   document.getElementById("exportBtn")?.addEventListener("click", async () => {
     const character = getCurrent();
     if (!character || !state.snapshots.length) {
-      alert("No data available to export.");
+      showToast("No snapshot data available to export for this character.", "warning");
       return;
     }
     const rows = [["timestamp", "messages", "chats", "comments", "favourites", "publishedChats", "publishedAt", "createdAt", "updatedAt"]];
@@ -577,6 +587,7 @@ function setupEventListeners() {
     a.href = url;
     a.download = `${(character.characterName || "janitorai").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "")}-stats.csv`;
     a.click();
+    showToast(`Exported ${state.snapshots.length} snapshots to CSV.`, "success");
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 
@@ -594,6 +605,17 @@ function setupEventListeners() {
     if (e.target.id === "entryModalOverlay") closeEntryModal();
   });
   document.getElementById("entryForm")?.addEventListener("submit", handleManualEntrySubmit);
+
+  setupDragAndDrop();
+  setupTooltips();
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeEntryModal();
+      const confirmModal = document.getElementById("confirmModalOverlay");
+      if (confirmModal) confirmModal.classList.remove("open");
+    }
+  });
 }
 
 function showNotice(text) {
@@ -665,101 +687,310 @@ async function handleManualEntrySubmit(e) {
   await storage.set({ activeCharacterId: id });
   closeEntryModal();
   await load();
+  showToast(`Successfully recorded snapshot for ${name}!`, "success");
   showNotice(`Successfully recorded snapshot for ${name}!`);
+}
+
+async function processCsvFile(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith(".csv") && file.type && !file.type.includes("csv") && !file.type.includes("text")) {
+    showToast("Please select or drop a valid .csv file.", "warning");
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) {
+      showToast("CSV file does not contain enough data rows.", "warning");
+      return;
+    }
+
+    const parseCsvLine = (line) => {
+      const regex = /(?:,|\n|^)("(?:(?:"")*[^"]*)*"|[^",\n]*|(?:\n|$))/g;
+      const record = [];
+      let match;
+      while ((match = regex.exec(line)) !== null) {
+        let field = match[1];
+        if (field.startsWith('"') && field.endsWith('"')) {
+          field = field.slice(1, -1).replace(/""/g, '"');
+        }
+        record.push(field);
+        if (regex.lastIndex >= line.length) break;
+      }
+      return record;
+    };
+
+    const header = parseCsvLine(lines[0]).map(h => h.toLowerCase().trim());
+    const charName = file.name.replace(/-stats\.csv$/i, "").replace(/[_-]/g, " ") || "Imported Character";
+    const charId = "imported-" + charName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
+    let importedCount = 0;
+    let charMetadata = {
+      characterId: charId,
+      characterName: charName,
+      url: "",
+      createdAt: null,
+      updatedAt: null,
+      publishedAt: null
+    };
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = parseCsvLine(lines[i]);
+      if (cols.length < 5) continue;
+      const row = {};
+      header.forEach((h, idx) => { row[h] = cols[idx]; });
+
+      const timestamp = row.timestamp || new Date(Date.now() - (lines.length - i) * 3600000).toISOString();
+      const msgs = Number(row.messages || row.msgs);
+      const chats = Number(row.chats);
+      const comments = Number(row.comments);
+      const favourites = Number(row.favourites || row.favorites);
+      const publishedChats = row.publishedchats ? Number(row.publishedchats) : null;
+
+      if (row.createdat && !charMetadata.createdAt) charMetadata.createdAt = row.createdat;
+      if (row.updatedat) charMetadata.updatedAt = row.updatedat;
+      if (row.publishedat && !charMetadata.publishedAt) charMetadata.publishedAt = row.publishedat;
+
+      if (![msgs, chats, comments, favourites].every(Number.isFinite)) continue;
+
+      const snapshot = {
+        timestamp,
+        characterId: charId,
+        msgs,
+        msgsDisplay: formatCompact(msgs),
+        chats,
+        chatsDisplay: formatCompact(chats),
+        comments,
+        commentsDisplay: formatCompact(comments),
+        favourites,
+        favouritesDisplay: formatCompact(favourites),
+        publishedChats,
+        publishedChatsDisplay: publishedChats != null ? formatCompact(publishedChats) : null
+      };
+
+      await saveCharacterSnapshot(charMetadata, snapshot);
+      importedCount++;
+    }
+
+    if (importedCount === 0) {
+      showToast("No valid snapshot rows could be parsed from this CSV.", "warning");
+      return;
+    }
+
+    closeEntryModal();
+    await storage.set({ activeCharacterId: charId });
+    await load();
+    showToast(`Successfully imported ${importedCount} snapshots for "${charName}".`, "success");
+    showNotice(`Successfully imported ${importedCount} snapshots for "${charName}".`);
+  } catch (err) {
+    console.error(err);
+    showToast("Failed to parse CSV file: " + err.message, "error");
+  }
 }
 
 async function handleCsvUpload(e) {
   const file = e.target.files?.[0];
   if (!file) return;
+  await processCsvFile(file);
+  e.target.value = "";
+}
 
-  const reader = new FileReader();
-  reader.onload = async (event) => {
-    try {
-      const text = event.target.result;
-      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-      if (lines.length < 2) {
-        alert("CSV file does not contain enough data.");
-        return;
+function setupDragAndDrop() {
+  const dropzone = document.getElementById("csvDropzone");
+  const modal = document.getElementById("entryModalOverlay");
+  const fileInput = document.getElementById("csvFileInput");
+
+  if (dropzone && fileInput) {
+    dropzone.addEventListener("click", () => fileInput.click());
+    dropzone.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        fileInput.click();
       }
+    });
+  }
 
-      const parseCsvLine = (line) => {
-        const regex = /(?:,|\n|^)("(?:(?:"")*[^"]*)*"|[^",\n]*|(?:\n|$))/g;
-        const record = [];
-        let match;
-        while ((match = regex.exec(line)) !== null) {
-          let field = match[1];
-          if (field.startsWith('"') && field.endsWith('"')) {
-            field = field.slice(1, -1).replace(/""/g, '"');
-          }
-          record.push(field);
-          if (regex.lastIndex >= line.length) break;
-        }
-        return record;
-      };
+  const preventDefaults = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
 
-      const header = parseCsvLine(lines[0]).map(h => h.toLowerCase().trim());
-      const charName = file.name.replace(/-stats\.csv$/i, "").replace(/[_-]/g, " ") || "Imported Character";
-      const charId = "imported-" + charName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-
-      let importedCount = 0;
-      let charMetadata = {
-        characterId: charId,
-        characterName: charName,
-        url: "",
-        createdAt: null,
-        updatedAt: null,
-        publishedAt: null
-      };
-
-      for (let i = 1; i < lines.length; i++) {
-        const cols = parseCsvLine(lines[i]);
-        if (cols.length < 5) continue;
-        const row = {};
-        header.forEach((h, idx) => { row[h] = cols[idx]; });
-
-        const timestamp = row.timestamp || new Date(Date.now() - (lines.length - i) * 3600000).toISOString();
-        const msgs = Number(row.messages || row.msgs);
-        const chats = Number(row.chats);
-        const comments = Number(row.comments);
-        const favourites = Number(row.favourites || row.favorites);
-        const publishedChats = row.publishedchats ? Number(row.publishedchats) : null;
-
-        if (row.createdat && !charMetadata.createdAt) charMetadata.createdAt = row.createdat;
-        if (row.updatedat) charMetadata.updatedAt = row.updatedat;
-        if (row.publishedat && !charMetadata.publishedAt) charMetadata.publishedAt = row.publishedat;
-
-        if (![msgs, chats, comments, favourites].every(Number.isFinite)) continue;
-
-        const snapshot = {
-          timestamp,
-          characterId: charId,
-          msgs,
-          msgsDisplay: formatCompact(msgs),
-          chats,
-          chatsDisplay: formatCompact(chats),
-          comments,
-          commentsDisplay: formatCompact(comments),
-          favourites,
-          favouritesDisplay: formatCompact(favourites),
-          publishedChats,
-          publishedChatsDisplay: publishedChats != null ? formatCompact(publishedChats) : null
-        };
-
-        await saveCharacterSnapshot(charMetadata, snapshot);
-        importedCount++;
+  const setDragActive = (active) => {
+    if (dropzone) {
+      if (active) {
+        dropzone.classList.add("drag-active");
+      } else {
+        dropzone.classList.remove("drag-active");
       }
-
-      await storage.set({ activeCharacterId: charId });
-      await load();
-      showNotice(`Successfully imported ${importedCount} snapshots for "${charName}".`);
-    } catch (err) {
-      console.error(err);
-      alert("Failed to parse CSV file: " + err.message);
-    } finally {
-      e.target.value = "";
     }
   };
-  reader.readAsText(file);
+
+  [modal, dropzone].forEach(el => {
+    if (!el) return;
+    ["dragenter", "dragover"].forEach(eventName => {
+      el.addEventListener(eventName, (e) => {
+        preventDefaults(e);
+        setDragActive(true);
+      });
+    });
+
+    ["dragleave", "dragend"].forEach(eventName => {
+      el.addEventListener(eventName, (e) => {
+        preventDefaults(e);
+        if (!el.contains(e.relatedTarget)) {
+          setDragActive(false);
+        }
+      });
+    });
+
+    el.addEventListener("drop", async (e) => {
+      preventDefaults(e);
+      setDragActive(false);
+      const droppedFiles = e.dataTransfer?.files;
+      if (droppedFiles && droppedFiles.length > 0) {
+        const file = droppedFiles[0];
+        await processCsvFile(file);
+      }
+    });
+  });
+}
+
+function showToast(message, type = "info") {
+  let container = document.getElementById("toastContainer");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toastContainer";
+    container.className = "toast-container";
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+
+  const iconMap = {
+    info: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>`,
+    success: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`,
+    warning: `<svg viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/></svg>`,
+    error: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></svg>`
+  };
+
+  toast.innerHTML = `
+    <div class="toast-icon">${iconMap[type] || iconMap.info}</div>
+    <div class="toast-message">${escapeHtml(message)}</div>
+    <button type="button" class="toast-close" aria-label="Close notification">&times;</button>
+  `;
+
+  const removeToast = () => {
+    toast.classList.add("toast-leaving");
+    setTimeout(() => {
+      toast.remove();
+    }, 220);
+  };
+
+  toast.querySelector(".toast-close").addEventListener("click", removeToast);
+  container.appendChild(toast);
+
+  requestAnimationFrame(() => {
+    toast.classList.add("toast-visible");
+  });
+
+  setTimeout(removeToast, 4200);
+}
+
+function openConfirmModal({ title, message, confirmText, onConfirm }) {
+  const overlay = document.getElementById("confirmModalOverlay");
+  const titleEl = document.getElementById("confirmModalTitle");
+  const descEl = document.getElementById("confirmModalDesc");
+  const proceedBtn = document.getElementById("proceedConfirmBtn");
+  const cancelBtn = document.getElementById("cancelConfirmBtn");
+
+  if (!overlay) return;
+
+  if (titleEl && title) titleEl.textContent = title;
+  if (descEl && message) descEl.innerHTML = message;
+  if (proceedBtn && confirmText) proceedBtn.textContent = confirmText;
+
+  const close = () => {
+    overlay.classList.remove("open");
+  };
+
+  const newProceedBtn = proceedBtn.cloneNode(true);
+  proceedBtn.parentNode.replaceChild(newProceedBtn, proceedBtn);
+
+  newProceedBtn.addEventListener("click", async () => {
+    close();
+    if (onConfirm) await onConfirm();
+  });
+
+  cancelBtn.onclick = close;
+  overlay.onclick = (e) => {
+    if (e.target === overlay) close();
+  };
+
+  overlay.classList.add("open");
+}
+
+function setupTooltips() {
+  let tooltipEl = document.getElementById("appTooltip");
+  if (!tooltipEl) {
+    tooltipEl = document.createElement("div");
+    tooltipEl.id = "appTooltip";
+    tooltipEl.className = "app-tooltip";
+    document.body.appendChild(tooltipEl);
+  }
+
+  const showTooltip = (el) => {
+    const text = el.getAttribute("data-tooltip");
+    if (!text) return;
+
+    tooltipEl.textContent = text;
+    tooltipEl.classList.add("visible");
+
+    const rect = el.getBoundingClientRect();
+    const tooltipRect = tooltipEl.getBoundingClientRect();
+
+    let top = rect.top - tooltipRect.height - 8;
+    let left = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
+
+    if (top < 8) {
+      top = rect.bottom + 8;
+    }
+
+    const pad = 12;
+    if (left < pad) left = pad;
+    if (left + tooltipRect.width > window.innerWidth - pad) {
+      left = window.innerWidth - pad - tooltipRect.width;
+    }
+
+    tooltipEl.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
+  };
+
+  const hideTooltip = () => {
+    tooltipEl.classList.remove("visible");
+  };
+
+  document.body.addEventListener("pointerover", (e) => {
+    const target = e.target.closest("[data-tooltip]");
+    if (target) showTooltip(target);
+  });
+
+  document.body.addEventListener("pointerout", (e) => {
+    const target = e.target.closest("[data-tooltip]");
+    if (target) hideTooltip();
+  });
+
+  document.body.addEventListener("focusin", (e) => {
+    const target = e.target.closest("[data-tooltip]");
+    if (target) showTooltip(target);
+  });
+
+  document.body.addEventListener("focusout", (e) => {
+    const target = e.target.closest("[data-tooltip]");
+    if (target) hideTooltip();
+  });
+
+  window.addEventListener("scroll", hideTooltip, { passive: true });
 }
 
 async function loadSampleData() {

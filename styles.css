@@ -1,40 +1,41 @@
 /* ==========================================================================
-   JanitorAI Stats Tracker — Warm Stone & Muted Sage Design System
-   Inspired by Claude/Anthropic's calm, editorial, developer-first aesthetic.
+   JStats — Claude & Anthropic Color Design System
+   Warm obsidian stone, Anthropic terracotta clay, editorial humanist typography.
    ========================================================================== */
 
 :root {
-  /* Warm Dark Stone Surfaces */
-  --bg-primary:          #1a1816;
-  --bg-secondary:        #211f1d;
-  --bg-card:             #282523;
-  --bg-card-hover:       #302d2a;
-  --bg-elevated:         #353230;
-  --bg-glass:            rgba(26, 24, 22, 0.94);
+  /* Warm Dark Stone Surfaces (Authentic Claude Palette) */
+  --bg-primary:          #181715;
+  --bg-secondary:        #201e1b;
+  --bg-card:             #252320;
+  --bg-card-hover:       #2c2925;
+  --bg-elevated:         #2e2b27;
+  --bg-glass:            rgba(24, 23, 21, 0.94);
 
-  /* Muted Sage Accent Palette */
-  --sage-primary:        #81B29A;
-  --sage-deep:           #3D6B56;
-  --sage-light:          #A8D5BA;
-  --sage-wash:           rgba(129, 178, 154, 0.12);
-  --sage-glow:           rgba(129, 178, 154, 0.2);
+  /* Claude Signature Terracotta Clay */
+  --claude-accent:       #d97757;
+  --claude-accent-hover: #e28a6d;
+  --claude-accent-active:#c46647;
+  --claude-accent-wash:  rgba(217, 119, 87, 0.12);
+  --claude-accent-glow:  rgba(217, 119, 87, 0.22);
+
+  /* Primary Brand Action Accent */
+  --color-accent:        var(--claude-accent);
+  --color-accent-hover:  var(--claude-accent-hover);
 
   /* Warm Stone Borders */
-  --color-border-subtle: #33302d;
-  --color-border-medium: #4a4541;
-  --color-border-focus:  var(--sage-primary);
+  --color-border-subtle: #2e2b27;
+  --color-border-medium: #3f3b35;
+  --color-border-hover:  #524d45;
+  --color-border-focus:  var(--claude-accent);
 
   /* Warm Off-White Typography */
-  --color-text-primary:   #ede9e3;
-  --color-text-secondary: #a8a29e;
-  --color-text-muted:     #78716c;
-  --color-text-inverse:   #1a1816;
+  --color-text-primary:   #faf8f5;
+  --color-text-secondary: #aba49c;
+  --color-text-muted:     #7d756d;
+  --color-text-inverse:   #181715;
 
-  /* Brand / Action Accents */
-  --color-accent:         var(--sage-primary);
-  --color-accent-hover:   #6da88a;
-
-  /* Soft Status Tones */
+  /* Harmonious Supporting Tones */
   --color-info:           #81B29A;
   --color-info-bg:        rgba(129, 178, 154, 0.08);
   --color-info-border:    rgba(129, 178, 154, 0.24);
@@ -50,10 +51,10 @@
   /* Elevation & Geometry (Clean Non-Pill Radii) */
   --radius-xs:            4px;
   --radius-sm:            6px;
-  --radius-md:            10px;
-  --radius-lg:            14px;
-  --shadow-card:          0 1px 3px rgba(0, 0, 0, 0.25), 0 1px 2px rgba(0, 0, 0, 0.18);
-  --shadow-elevated:      0 8px 24px rgba(0, 0, 0, 0.35);
+  --radius-md:            8px;
+  --radius-lg:            12px;
+  --shadow-card:          0 1px 3px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-elevated:      0 12px 36px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.25);
 
   /* Fonts */
   --font-sans:            'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -71,16 +72,17 @@
 
   --color-border-subtle: #e7e5e4;
   --color-border-medium: #d6d3d1;
-  --color-border-focus:  #3D6B56;
+  --color-border-hover:  #b8b2a7;
+  --color-border-focus:  #c86445;
 
   --color-text-primary:   #1c1917;
   --color-text-secondary: #57534e;
   --color-text-muted:     #78716c;
 
-  --sage-primary:        #3D6B56;
-  --sage-light:          #81B29A;
-  --color-accent:         #3D6B56;
-  --color-accent-hover:   #2e5241;
+  --claude-accent:       #c86445;
+  --claude-accent-hover: #b85436;
+  --color-accent:        #c86445;
+  --color-accent-hover:  #b85436;
 }
 
 /* Base Reset */
@@ -95,7 +97,7 @@ html, body {
 
 body {
   background-color: var(--bg-primary);
-  background-image: radial-gradient(circle at 50% 0%, #24211e 0%, #1a1816 75%);
+  background-image: radial-gradient(circle at 50% 0%, #201e1b 0%, #181715 75%);
   background-attachment: fixed;
   color: var(--color-text-primary);
   font-family: var(--font-sans);
@@ -161,9 +163,10 @@ button {
 }
 
 .app-bar-inner {
-  max-width: 1240px;
-  margin: 0 auto;
-  padding: 14px 24px;
+  max-width: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 14px 36px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -198,12 +201,12 @@ button {
   align-items: center;
 }
 
-/* Page Container */
+/* Page Container (Full-Width Responsive) */
 .page {
-  max-width: 1240px;
+  max-width: 100%;
   width: 100%;
-  margin: 0 auto;
-  padding: 24px 24px 60px;
+  margin: 0;
+  padding: 24px 36px 64px;
   flex: 1;
 }
 
@@ -286,7 +289,7 @@ button {
 }
 
 .btn-micro:hover {
-  color: var(--sage-primary);
+  color: var(--claude-accent);
   border-color: var(--color-border-medium);
   background: var(--bg-card);
 }
@@ -323,8 +326,8 @@ button {
 }
 
 .custom-select-trigger.is-open {
-  border-color: var(--sage-primary);
-  box-shadow: 0 0 0 1px var(--sage-glow);
+  border-color: var(--claude-accent);
+  box-shadow: 0 0 0 1px var(--claude-accent-glow);
 }
 
 .custom-select-label {
@@ -338,7 +341,7 @@ button {
 .custom-select-chevron {
   width: 14px;
   height: 14px;
-  color: var(--sage-primary);
+  color: var(--claude-accent);
   stroke: currentColor;
   stroke-width: 2;
   fill: none;
@@ -395,8 +398,8 @@ button {
 }
 
 .custom-select-item.is-selected {
-  background-color: rgba(129, 178, 154, 0.12);
-  color: var(--sage-primary);
+  background-color: var(--claude-accent-wash);
+  color: var(--claude-accent);
   font-weight: 600;
 }
 
@@ -411,7 +414,7 @@ button {
 .custom-select-check {
   width: 13px;
   height: 13px;
-  color: var(--sage-primary);
+  color: var(--claude-accent);
   stroke: currentColor;
   stroke-width: 2.5;
   fill: none;
@@ -478,21 +481,40 @@ button {
   transform: translateY(0);
 }
 
-/* Sage Primary Button */
+/* Claude Terracotta Primary Button */
 .btn-primary {
-  background: var(--sage-primary);
-  color: #122119;
-  border-color: var(--sage-primary);
+  background: var(--claude-accent);
+  color: #ffffff;
+  border-color: var(--claude-accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
 .btn-primary svg {
-  stroke: #122119;
+  stroke: #ffffff;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
-  color: #0d1913;
+  background: var(--claude-accent-hover);
+  border-color: var(--claude-accent-hover);
+  color: #ffffff;
+}
+
+.btn-primary:active {
+  background: var(--claude-accent-active);
+}
+
+/* Danger Solid Button (For Custom Confirm Modals) */
+.btn-danger-solid {
+  background: #d95757;
+  color: #ffffff;
+  border-color: #d95757;
+  font-weight: 600;
+}
+
+.btn-danger-solid:hover:not(:disabled) {
+  background: #c44747;
+  border-color: #c44747;
+  color: #ffffff;
 }
 
 /* Ghost / Secondary Button */
@@ -603,9 +625,10 @@ select.select:focus {
 }
 
 .range-btn.active {
-  background: var(--sage-primary);
-  color: #122119;
-  border-color: var(--sage-primary);
+  background: var(--claude-accent);
+  color: #ffffff;
+  border-color: var(--claude-accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 /* Cards: Uniform Structured Grid (No Bento) */
@@ -895,41 +918,332 @@ select.select:focus {
   position: fixed;
   inset: 0;
   z-index: 100;
-  background: rgba(18, 16, 14, 0.85);
-  backdrop-filter: blur(8px);
-  display: none;
+  background: rgba(18, 16, 14, 0.82);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .modal-overlay.open {
-  display: flex;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .modal-card {
-  background: var(--bg-secondary);
+  background: var(--bg-elevated);
   border: 1px solid var(--color-border-medium);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   width: 100%;
-  max-width: 500px;
-  padding: 22px 24px;
+  max-width: 520px;
+  padding: 24px 28px;
   box-shadow: var(--shadow-elevated);
+  transform: scale(0.96) translateY(8px);
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.modal-overlay.open .modal-card {
+  transform: scale(1) translateY(0);
 }
 
 .modal-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 18px;
+  align-items: flex-start;
+  margin-bottom: 16px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .modal-header h3 {
   margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.modal-subtitle {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* CSV Drag & Drop Dropzone */
+.csv-dropzone {
+  border: 2px dashed var(--color-border-medium);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  padding: 20px 16px;
+  text-align: center;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  transition: all 180ms ease;
+  user-select: none;
+  margin-bottom: 12px;
+}
+
+.csv-dropzone:hover, .csv-dropzone:focus-visible {
+  border-color: var(--claude-accent);
+  background: rgba(217, 119, 87, 0.05);
+  outline: none;
+}
+
+.csv-dropzone.drag-active {
+  border-color: var(--claude-accent);
+  background: rgba(217, 119, 87, 0.1);
+  box-shadow: 0 0 0 3px var(--claude-accent-glow);
+  transform: scale(1.01);
+}
+
+.dropzone-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  background: var(--claude-accent-wash);
+  color: var(--claude-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 180ms ease;
+}
+
+.csv-dropzone:hover .dropzone-icon,
+.csv-dropzone.drag-active .dropzone-icon {
+  transform: translateY(-2px);
+}
+
+.dropzone-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
+.dropzone-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dropzone-primary {
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.dropzone-primary strong {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.dropzone-browse {
+  color: var(--claude-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 600;
+}
+
+.dropzone-secondary {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.modal-divider {
+  display: flex;
+  align-items: center;
+  margin: 16px 0;
+  text-align: center;
+}
+
+.modal-divider::before,
+.modal-divider::after {
+  content: "";
+  flex: 1;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.modal-divider span {
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+/* Custom Confirmation Modal (Claude Style) */
+.confirm-modal-card {
+  max-width: 440px;
+  padding: 24px;
+}
+
+.confirm-modal-top {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.confirm-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  background: rgba(217, 87, 87, 0.12);
+  border: 1px solid rgba(217, 87, 87, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #e07a7a;
+}
+
+.confirm-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
+.confirm-text h3 {
+  margin: 0 0 6px;
   font-size: 16px;
   font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.confirm-text p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Smooth Floating Tooltip (Claude Style) */
+.app-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: #faf8f5;
+  background: rgba(30, 28, 25, 0.96);
+  border: 1px solid #45413a;
+  border-radius: var(--radius-xs);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: none;
+  opacity: 0;
+  transform: translate3d(0, 0, 0);
+  transition: opacity 140ms cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+}
+
+.app-tooltip.visible {
+  opacity: 1;
+}
+
+/* Toast Notifications (Claude Aesthetic) */
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 380px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--color-border-medium);
+  box-shadow: var(--shadow-elevated);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  line-height: 1.4;
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(12px) scale(0.97);
+  transition: opacity 220ms cubic-bezier(0.16, 1, 0.3, 1), transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toast.toast-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.toast.toast-leaving {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.97);
+}
+
+.toast-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toast-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
+.toast-info .toast-icon { color: var(--claude-accent); }
+.toast-success .toast-icon { color: #81B29A; }
+.toast-warning .toast-icon { color: #e0a458; }
+.toast-error .toast-icon { color: #d97373; }
+
+.toast-message {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.toast-close {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color 120ms ease;
+  flex-shrink: 0;
+}
+
+.toast-close:hover {
   color: var(--color-text-primary);
 }
 
@@ -993,8 +1307,8 @@ select.select:focus {
 }
 
 .form-group input:focus {
-  border-color: var(--sage-primary);
-  box-shadow: 0 0 0 1px var(--sage-glow);
+  border-color: var(--claude-accent);
+  box-shadow: 0 0 0 1px var(--claude-accent-glow);
 }
 
 /* Custom Number Stepper (Eliminate Ugly Default White Spinners) */
@@ -1051,12 +1365,12 @@ input[type="number"] {
 
 .stepper-btn:hover {
   background: rgba(255, 255, 255, 0.08);
-  color: var(--sage-primary);
+  color: var(--claude-accent);
 }
 
 .stepper-btn:active {
-  background: rgba(129, 178, 154, 0.2);
-  color: var(--sage-light);
+  background: var(--claude-accent-wash);
+  color: var(--claude-accent-hover);
 }
 
 .stepper-btn svg {

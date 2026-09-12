@@ -20,15 +20,15 @@
           <span class="brand-title">JStats</span>
         </div>
         <div class="actions">
-          <button class="btn btn-secondary" id="exportBtn" title="Export character history as CSV">
+          <button class="btn btn-secondary" id="exportBtn" data-tooltip="Export character snapshot history to CSV">
             <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
             Export CSV
           </button>
-          <button class="btn btn-primary" id="collectBtn" title="Collect stats from active JanitorAI tab or log snapshot">
+          <button class="btn btn-primary" id="collectBtn" data-tooltip="Collect stats from active JanitorAI tab or log snapshot">
             <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             Collect Now
           </button>
-          <button class="btn btn-danger" id="clearBtn" title="Delete stored character history">
+          <button class="btn btn-danger" id="clearBtn" data-tooltip="Delete stored character history">
             <svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             Clear
           </button>
@@ -47,11 +47,11 @@
           <div class="selector-header">
             <span class="selector-label">Active Character</span>
             <div class="selector-quick-actions">
-              <button type="button" class="btn-micro" id="addBtn" title="Record character snapshot manually">
+              <button type="button" class="btn-micro" id="addBtn" data-tooltip="Record character snapshot or drop CSV">
                 <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
                 <span>Entry</span>
               </button>
-              <button type="button" class="btn-micro" id="importBtn" title="Import CSV">
+              <button type="button" class="btn-micro" id="importBtn" data-tooltip="Import character history from CSV">
                 <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5-5 5 5M12 5v12"/></svg>
                 <span>Import</span>
               </button>
@@ -60,7 +60,7 @@
 
           <!-- Ink2Obsidian-style Custom Select -->
           <div class="custom-select-wrap" id="characterCustomSelect">
-            <button type="button" class="custom-select-trigger" id="charSelectTrigger" aria-haspopup="listbox" aria-expanded="false">
+            <button type="button" class="custom-select-trigger" id="charSelectTrigger" aria-haspopup="listbox" aria-expanded="false" data-tooltip="Select active character">
               <span class="custom-select-label" id="charSelectCurrent">Select a character...</span>
               <svg class="custom-select-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
             </button>
@@ -90,13 +90,32 @@
   <!-- Hidden File Input for CSV Import -->
   <input type="file" id="csvFileInput" accept=".csv,text/csv" style="display: none;">
 
-  <!-- Manual Entry Modal -->
-  <div class="modal-overlay" id="entryModalOverlay">
+  <!-- Manual Entry & Drag-Drop Modal -->
+  <div class="modal-overlay" id="entryModalOverlay" role="dialog" aria-modal="true" aria-labelledby="entryModalTitle">
     <div class="modal-card">
       <div class="modal-header">
-        <h3>Record Character Snapshot</h3>
-        <button class="modal-close" id="closeModalBtn" aria-label="Close modal">&times;</button>
+        <div>
+          <h3 id="entryModalTitle">Record Character Snapshot</h3>
+          <p class="modal-subtitle">Import CSV snapshot history or log latest numbers manually.</p>
+        </div>
+        <button class="modal-close" id="closeModalBtn" aria-label="Close modal" data-tooltip="Close modal">&times;</button>
       </div>
+
+      <!-- Drag & Drop Dropzone for CSV (Click or Drag) -->
+      <div class="csv-dropzone" id="csvDropzone" tabindex="0" role="button" data-tooltip="Click or drop CSV file here">
+        <div class="dropzone-icon">
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5-5 5 5M12 5v12"/></svg>
+        </div>
+        <div class="dropzone-text">
+          <div class="dropzone-primary"><strong>Drag & drop CSV file here</strong>, or <span class="dropzone-browse">browse files</span></div>
+          <div class="dropzone-secondary">Quickly import snapshot history from an exported JanitorAI CSV</div>
+        </div>
+      </div>
+
+      <div class="modal-divider">
+        <span>or enter snapshot numbers</span>
+      </div>
+
       <form id="entryForm" class="modal-form">
         <div class="form-row">
           <div class="form-group">
@@ -114,10 +133,10 @@
             <div class="number-input-wrap">
               <input type="number" id="manualMsgs" placeholder="52000" min="0" required>
               <div class="stepper-controls">
-                <button type="button" class="stepper-btn stepper-up" data-target="manualMsgs" aria-label="Increase messages">
+                <button type="button" class="stepper-btn stepper-up" data-target="manualMsgs" aria-label="Increase messages" data-tooltip="Increase">
                   <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
                 </button>
-                <button type="button" class="stepper-btn stepper-down" data-target="manualMsgs" aria-label="Decrease messages">
+                <button type="button" class="stepper-btn stepper-down" data-target="manualMsgs" aria-label="Decrease messages" data-tooltip="Decrease">
                   <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                 </button>
               </div>
@@ -128,10 +147,10 @@
             <div class="number-input-wrap">
               <input type="number" id="manualChats" placeholder="1800" min="0" required>
               <div class="stepper-controls">
-                <button type="button" class="stepper-btn stepper-up" data-target="manualChats" aria-label="Increase chats">
+                <button type="button" class="stepper-btn stepper-up" data-target="manualChats" aria-label="Increase chats" data-tooltip="Increase">
                   <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
                 </button>
-                <button type="button" class="stepper-btn stepper-down" data-target="manualChats" aria-label="Decrease chats">
+                <button type="button" class="stepper-btn stepper-down" data-target="manualChats" aria-label="Decrease chats" data-tooltip="Decrease">
                   <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                 </button>
               </div>
@@ -142,10 +161,10 @@
             <div class="number-input-wrap">
               <input type="number" id="manualComments" placeholder="240" min="0" required>
               <div class="stepper-controls">
-                <button type="button" class="stepper-btn stepper-up" data-target="manualComments" aria-label="Increase comments">
+                <button type="button" class="stepper-btn stepper-up" data-target="manualComments" aria-label="Increase comments" data-tooltip="Increase">
                   <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
                 </button>
-                <button type="button" class="stepper-btn stepper-down" data-target="manualComments" aria-label="Decrease comments">
+                <button type="button" class="stepper-btn stepper-down" data-target="manualComments" aria-label="Decrease comments" data-tooltip="Decrease">
                   <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                 </button>
               </div>
@@ -156,10 +175,10 @@
             <div class="number-input-wrap">
               <input type="number" id="manualFavourites" placeholder="750" min="0" required>
               <div class="stepper-controls">
-                <button type="button" class="stepper-btn stepper-up" data-target="manualFavourites" aria-label="Increase favourites">
+                <button type="button" class="stepper-btn stepper-up" data-target="manualFavourites" aria-label="Increase favourites" data-tooltip="Increase">
                   <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
                 </button>
-                <button type="button" class="stepper-btn stepper-down" data-target="manualFavourites" aria-label="Decrease favourites">
+                <button type="button" class="stepper-btn stepper-down" data-target="manualFavourites" aria-label="Decrease favourites" data-tooltip="Decrease">
                   <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
                 </button>
               </div>
@@ -171,10 +190,10 @@
           <div class="number-input-wrap">
             <input type="number" id="manualPublishedChats" placeholder="1200" min="0">
             <div class="stepper-controls">
-              <button type="button" class="stepper-btn stepper-up" data-target="manualPublishedChats" aria-label="Increase published chats">
+              <button type="button" class="stepper-btn stepper-up" data-target="manualPublishedChats" aria-label="Increase published chats" data-tooltip="Increase">
                 <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
               </button>
-              <button type="button" class="stepper-btn stepper-down" data-target="manualPublishedChats" aria-label="Decrease published chats">
+              <button type="button" class="stepper-btn stepper-down" data-target="manualPublishedChats" aria-label="Decrease published chats" data-tooltip="Decrease">
                 <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
               </button>
             </div>
@@ -187,6 +206,31 @@
       </form>
     </div>
   </div>
+
+  <!-- Custom Confirmation Modal (Replaces default Chrome confirm popup) -->
+  <div class="modal-overlay" id="confirmModalOverlay" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+    <div class="modal-card confirm-modal-card">
+      <div class="confirm-modal-top">
+        <div class="confirm-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+        </div>
+        <div class="confirm-text">
+          <h3 id="confirmModalTitle">Delete Character History</h3>
+          <p id="confirmModalDesc">Are you sure you want to permanently delete all snapshot data for this character? This action cannot be undone.</p>
+        </div>
+      </div>
+      <div class="confirm-actions">
+        <button type="button" class="btn btn-secondary" id="cancelConfirmBtn">Cancel</button>
+        <button type="button" class="btn btn-danger-solid" id="proceedConfirmBtn">Delete Data</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Smooth Floating Tooltip Element -->
+  <div class="app-tooltip" id="appTooltip" role="tooltip" aria-hidden="true"></div>
+
+  <!-- Toast Notifications Container -->
+  <div class="toast-container" id="toastContainer" aria-live="polite"></div>
 
   <script type="module" src="./dashboard.js"></script>
 </body>

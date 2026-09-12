@@ -1,9 +1,9 @@
 const STAT_CONFIG = {
-  msgs: { label: "Messages", short: "Msgs", color: "#d97745" },
+  msgs: { label: "Messages", short: "Msgs", color: "#d97757" },
   chats: { label: "Chats", short: "Chats", color: "#81B29A" },
   comments: { label: "Comments", short: "Comments", color: "#e0a458" },
   favourites: { label: "Favourites", short: "Faves", color: "#d97373" },
-  publishedChats: { label: "Published chats", short: "Pub. chats", color: "#6da88a" }
+  publishedChats: { label: "Published chats", short: "Pub. chats", color: "#6a9bcc" }
 };
 
 const TRACKED_SERIES = Object.entries(STAT_CONFIG).map(([key, value]) => ({ key, ...value }));
