@@ -39,17 +39,8 @@ async function migrateLegacyStorage() {
 
 export function characterIdFromUrl(url) {
   if (!url) return null;
-  try {
-    const parsed = new URL(url.startsWith("http") ? url : `https://janitorai.com/characters/${url}`);
-    const match = parsed.pathname.match(/\/characters\/([0-9a-f]{8}-[0-9a-f-]{27,})/i);
-    if (match?.[1]) return match[1];
-    // Also handle simple uuid directly in path
-    const directMatch = parsed.pathname.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-    return directMatch?.[1] || null;
-  } catch {
-    const directMatch = String(url).match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-    return directMatch?.[1] || null;
-  }
+  const match = String(url).match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  return match ? match[1].toLowerCase() : null;
 }
 
 async function ensureAlarm() {
@@ -155,36 +146,63 @@ export async function scrapeViaBackgroundTab(characterId, jobMetadata = null) {
 
 function extractTokenFromString(raw) {
   if (!raw) return null;
-  try {
-    const decoded = decodeURIComponent(raw);
-    const parsed = JSON.parse(decoded);
-    const token = parsed?.access_token || (Array.isArray(parsed) && parsed[0]?.access_token);
-    if (token && typeof token === "string" && token.startsWith("ey")) return token;
-  } catch {}
+  const b64decode = (s) => {
+    try { return atob(s); } catch {}
+    try { return atob(s.replace(/-/g, "+").replace(/_/g, "/")); } catch {}
+    try {
+      let pad = s.replace(/-/g, "+").replace(/_/g, "/");
+      while (pad.length % 4) pad += "=";
+      return atob(pad);
+    } catch {}
+    return null;
+  };
+
+  let str = raw;
+  try { str = decodeURIComponent(raw); } catch {}
+  if (str.startsWith("base64-")) str = str.slice(7);
+
+  if (str.startsWith("ey") && str.split(".").length === 3) return str;
 
   try {
-    if (raw.startsWith("base64-")) {
-      const b64 = atob(raw.slice(7));
-      const parsed = JSON.parse(b64);
-      const token = parsed?.access_token || (Array.isArray(parsed) && parsed[0]?.access_token);
-      if (token && typeof token === "string" && token.startsWith("ey")) return token;
-    }
+    const o = JSON.parse(str);
+    const tok = o?.access_token || o?.accessToken || (Array.isArray(o) && o[0]?.access_token) || o?.currentSession?.access_token;
+    if (tok && typeof tok === "string" && tok.startsWith("ey")) return tok;
   } catch {}
 
-  const jwtMatch = String(raw).match(/(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})/);
-  if (jwtMatch) return jwtMatch[1];
+  const decoded = b64decode(str);
+  if (decoded) {
+    if (decoded.startsWith("ey") && decoded.split(".").length === 3) return decoded;
+    try {
+      const o = JSON.parse(decoded);
+      const tok = o?.access_token || o?.accessToken || (Array.isArray(o) && o[0]?.access_token) || o?.currentSession?.access_token;
+      if (tok && typeof tok === "string" && tok.startsWith("ey")) return tok;
+    } catch {}
+    const m = decoded.match(/(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})/);
+    if (m) return m[1];
+  }
+
+  const m = str.match(/(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})/);
+  if (m) return m[1];
 
   return null;
 }
 
 /**
  * Retrieves the user's JanitorAI session JWT from Chrome cookies if present.
+ * Queries both domain and url patterns to ensure partitioned / host cookies are read.
  * Handles multi-cookie chunking used by Supabase Auth (e.g. .0, .1).
  */
-async function getJanitorToken() {
+export async function getJanitorToken() {
   if (typeof chrome === "undefined" || !chrome.cookies) return null;
   try {
-    const cookies = await chrome.cookies.getAll({ domain: "janitorai.com" });
+    const domainCookies = await chrome.cookies.getAll({ domain: "janitorai.com" }).catch(() => []);
+    const urlCookies = await chrome.cookies.getAll({ url: "https://janitorai.com" }).catch(() => []);
+    const combinedMap = new Map();
+    for (const c of [...domainCookies, ...urlCookies]) {
+      combinedMap.set(`${c.domain}:${c.name}`, c);
+    }
+    const cookies = [...combinedMap.values()];
+
     const chunks = new Map();
     const singles = [];
 
@@ -226,10 +244,11 @@ async function getJanitorToken() {
  * 2. Falls back to silent inactive tab DOM extraction if API is protected or 401/403.
  */
 export async function scrapeCharacterById(characterId, jobMetadata = null) {
-  if (!characterId) return null;
+  const cleanId = characterIdFromUrl(characterId) || characterId;
+  if (!cleanId) return null;
 
   try {
-    const endpoint = `https://janitorai.com/hampter/characters/${characterId}`;
+    const endpoint = `https://janitorai.com/hampter/characters/${cleanId}`;
     const token = await getJanitorToken();
     const headers = {
       Accept: "application/json, text/plain, */*",
@@ -245,38 +264,78 @@ export async function scrapeCharacterById(characterId, jobMetadata = null) {
     });
 
     if (!res.ok) {
-      console.warn(`JStats: direct fetch returned HTTP ${res.status} for character ${characterId}; falling back to silent background tab`);
-      return await scrapeViaBackgroundTab(characterId, jobMetadata);
+      console.warn(`JStats: direct fetch returned HTTP ${res.status} for character ${cleanId}; falling back to silent background tab`);
+      return await scrapeViaBackgroundTab(cleanId, jobMetadata);
     }
 
     const json = await res.json();
     const raw = json.data?.character || json.data || json.character || json;
     if (!raw) {
-      return await scrapeViaBackgroundTab(characterId, jobMetadata);
+      return await scrapeViaBackgroundTab(cleanId, jobMetadata);
     }
 
     const charName = raw.name || raw.character_name || jobMetadata?.character_name || "JanitorAI Character";
-    const msgs = Number(
-      raw.stats?.message ?? raw.stats?.messages ?? raw.stats?.msgs ??
-      raw.total_message ?? raw.message ?? raw.msgs
-    ) || 0;
-    const chats = Number(
-      raw.stats?.chat ?? raw.stats?.chats ?? raw.chats ?? raw.chat ?? raw.chat_count
-    ) || 0;
-    const favourites = Number(
-      raw.stats?.favorite ?? raw.stats?.favourite ?? raw.stats?.favorites ?? raw.stats?.favourites ??
-      raw.favourites ?? raw.favorites ?? raw.favorite
-    ) || 0;
-    const comments = Number(
-      raw.stats?.comment ?? raw.stats?.comments ?? raw.comments ?? raw.comment
-    ) || 0;
+    const msgsRaw =
+      raw.total_message ??
+      raw.total_messages ??
+      raw.totalMessages ??
+      raw.totalMessage ??
+      raw.stats?.message ??
+      raw.stats?.messages ??
+      raw.stats?.msgs ??
+      raw.stats?.total_message ??
+      raw.message;
+
+    const chatsRaw =
+      raw.total_chat ??
+      raw.total_chats ??
+      raw.totalChats ??
+      raw.totalChat ??
+      raw.stats?.chat ??
+      raw.stats?.chats ??
+      raw.stats?.total_chat ??
+      raw.chat ??
+      raw.chats ??
+      raw.chat_count;
+
+    const favsRaw =
+      raw.total_favorite ??
+      raw.total_favorites ??
+      raw.total_favourite ??
+      raw.total_favourites ??
+      raw.stats?.favorite ??
+      raw.stats?.favourite ??
+      raw.stats?.favorites ??
+      raw.stats?.favourites ??
+      raw.favourites ??
+      raw.favorites ??
+      raw.favorite;
+
+    const commsRaw =
+      raw.total_comment ??
+      raw.total_comments ??
+      raw.stats?.comment ??
+      raw.stats?.comments ??
+      raw.comments ??
+      raw.comment;
+
+    const msgs = Number(msgsRaw);
+    const chats = Number(chatsRaw);
+    const favourites = Number(favsRaw);
+    const comments = Number(commsRaw);
+
+    if (!Number.isFinite(msgs) || !Number.isFinite(chats) || (msgs === 0 && chats === 0)) {
+      console.warn(`JStats: Direct API response for ${cleanId} did not contain valid numeric stats; falling back to background tab`, raw);
+      return await scrapeViaBackgroundTab(cleanId, jobMetadata);
+    }
+
     const pubVal = raw.stats?.publishedChats ?? raw.stats?.published_chats ?? raw.publishedChats ?? raw.published_chats;
     const publishedChats = pubVal != null ? Number(pubVal) : null;
 
     const charMetadata = {
-      characterId,
+      characterId: cleanId,
       characterName: charName,
-      url: jobMetadata?.url || `https://janitorai.com/characters/${characterId}`,
+      url: jobMetadata?.url || `https://janitorai.com/characters/${cleanId}`,
       avatar: raw.avatar || null,
       createdAt: raw.created_at || raw.createdAt || jobMetadata?.createdAt || null,
       updatedAt: raw.updated_at || raw.updatedAt || new Date().toISOString(),
@@ -286,15 +345,15 @@ export async function scrapeCharacterById(characterId, jobMetadata = null) {
 
     const snapshot = {
       timestamp: new Date().toISOString(),
-      characterId,
+      characterId: cleanId,
       msgs,
       msgsDisplay: msgs.toLocaleString(),
       chats,
       chatsDisplay: chats.toLocaleString(),
-      comments,
-      commentsDisplay: comments.toLocaleString(),
-      favourites,
-      favouritesDisplay: favourites.toLocaleString(),
+      comments: Number.isFinite(comments) && comments >= 0 ? comments : 0,
+      commentsDisplay: (Number.isFinite(comments) && comments >= 0 ? comments : 0).toLocaleString(),
+      favourites: Number.isFinite(favourites) && favourites >= 0 ? favourites : 0,
+      favouritesDisplay: (Number.isFinite(favourites) && favourites >= 0 ? favourites : 0).toLocaleString(),
       publishedChats,
       publishedChatsDisplay: publishedChats != null ? publishedChats.toLocaleString() : null
     };
@@ -303,7 +362,7 @@ export async function scrapeCharacterById(characterId, jobMetadata = null) {
     await saveCharacterSnapshot(charMetadata, snapshot);
 
     // 2. Save to Supabase (if configured)
-    await insertSnapshot(characterId, snapshot);
+    await insertSnapshot(cleanId, snapshot);
 
     // 3. Update last_scraped_at in Supabase job
     if (jobMetadata) {
@@ -314,11 +373,11 @@ export async function scrapeCharacterById(characterId, jobMetadata = null) {
       });
     }
 
-    console.debug(`JStats: Successfully scraped 1m snapshot for ${charName} (${characterId})`);
+    console.debug(`JStats: Successfully scraped 1m snapshot for ${charName} (${cleanId})`, snapshot);
     return snapshot;
   } catch (err) {
-    console.warn(`JStats: direct fetch error for ${characterId}; falling back to silent background tab`, err);
-    return await scrapeViaBackgroundTab(characterId, jobMetadata);
+    console.warn(`JStats: direct fetch error for ${cleanId}; falling back to silent background tab`, err);
+    return await scrapeViaBackgroundTab(cleanId, jobMetadata);
   }
 }
 
@@ -559,6 +618,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })()
       .then(sendResponse)
       .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  // 5. GET_JANITOR_TOKEN
+  if (message?.type === "GET_JANITOR_TOKEN") {
+    getJanitorToken()
+      .then(token => sendResponse({ ok: true, token }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
 
