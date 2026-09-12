@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>JanitorAI Stats Tracker</title>
-  <meta name="description" content="Local tracker and time-series analytics dashboard for JanitorAI character statistics.">
+  <meta name="description" content="Private, local time-series analytics and trend tracking for JanitorAI character statistics.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Newsreader:ital,opsz,wght@0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -16,21 +16,36 @@
       <div class="app-bar-inner">
         <div class="brand">
           <div class="brand-mark">J</div>
-          <div>
-            <div class="brand-title-wrap">
-              <span class="brand-title">JanitorAI Stats</span>
-              <span class="env-badge" id="envBadge">🌐 Web Tracker</span>
-            </div>
-            <div class="brand-sub">Private local character analytics & time-series trends</div>
+          <div class="brand-info">
+            <span class="brand-title">JanitorAI Stats</span>
+            <span class="brand-sub">Time-series analytics & trend tracker</span>
           </div>
         </div>
         <div class="actions">
-          <button class="btn btn-secondary" id="demoBtn" title="Load sample character data to test">✨ Load Demo</button>
-          <button class="btn btn-secondary" id="addBtn" title="Add character snapshot manually">➕ Add Entry</button>
-          <button class="btn btn-secondary" id="importBtn" title="Import previously exported CSV">📂 Import CSV</button>
-          <button class="btn btn-secondary" id="exportBtn" title="Download data as CSV">📥 Export CSV</button>
-          <button class="btn btn-primary" id="collectBtn" title="Collect from active tab or log snapshot">⚡ Collect now</button>
-          <button class="btn btn-danger" id="clearBtn" title="Delete current character history">🗑️ Clear</button>
+          <button class="btn btn-secondary" id="demoBtn" title="Load sample character dataset">
+            <svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z"/></svg>
+            Load Demo
+          </button>
+          <button class="btn btn-secondary" id="addBtn" title="Record character snapshot manually">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            Add Entry
+          </button>
+          <button class="btn btn-secondary" id="importBtn" title="Import previously exported CSV">
+            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5-5 5 5M12 5v12"/></svg>
+            Import CSV
+          </button>
+          <button class="btn btn-secondary" id="exportBtn" title="Export character history as CSV">
+            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+            Export CSV
+          </button>
+          <button class="btn btn-primary" id="collectBtn" title="Collect stats from active JanitorAI tab or log snapshot">
+            <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            Collect Now
+          </button>
+          <button class="btn btn-danger" id="clearBtn" title="Delete stored character history">
+            <svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            Clear
+          </button>
         </div>
       </div>
     </header>
@@ -39,7 +54,7 @@
       <div class="hero">
         <div class="hero-content">
           <h1 id="title">JanitorAI Character</h1>
-          <p id="subtitle">Waiting for the first snapshot.</p>
+          <p id="subtitle">Waiting for character snapshot data.</p>
           <div class="meta" id="meta"></div>
         </div>
         <div class="hero-selector">
@@ -87,27 +102,27 @@
         <div class="form-row form-grid-4">
           <div class="form-group">
             <label for="manualMsgs">Messages</label>
-            <input type="number" id="manualMsgs" placeholder="e.g. 52000" min="0" required>
+            <input type="number" id="manualMsgs" placeholder="52000" min="0" required>
           </div>
           <div class="form-group">
             <label for="manualChats">Chats</label>
-            <input type="number" id="manualChats" placeholder="e.g. 1800" min="0" required>
+            <input type="number" id="manualChats" placeholder="1800" min="0" required>
           </div>
           <div class="form-group">
             <label for="manualComments">Comments</label>
-            <input type="number" id="manualComments" placeholder="e.g. 240" min="0" required>
+            <input type="number" id="manualComments" placeholder="240" min="0" required>
           </div>
           <div class="form-group">
             <label for="manualFavourites">Favourites</label>
-            <input type="number" id="manualFavourites" placeholder="e.g. 750" min="0" required>
+            <input type="number" id="manualFavourites" placeholder="750" min="0" required>
           </div>
         </div>
         <div class="form-group">
           <label for="manualPublishedChats">Published Chats (optional)</label>
-          <input type="number" id="manualPublishedChats" placeholder="e.g. 1200" min="0">
+          <input type="number" id="manualPublishedChats" placeholder="1200" min="0">
         </div>
         <div class="modal-actions">
-          <button type="button" class="btn" onclick="document.getElementById('closeModalBtn').click()">Cancel</button>
+          <button type="button" class="btn btn-secondary" id="cancelModalBtn">Cancel</button>
           <button type="submit" class="btn btn-primary">Save Snapshot</button>
         </div>
       </form>

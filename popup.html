@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JanitorAI Stats</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="popup-body">
@@ -11,7 +14,7 @@
     <div class="app-bar-inner">
       <div class="brand">
         <div class="brand-mark">J</div>
-        <div>
+        <div class="brand-info">
           <div class="brand-title">JanitorAI Stats</div>
           <div class="brand-sub">Live local tracking</div>
         </div>
@@ -20,7 +23,7 @@
   </header>
   <main class="page">
     <div class="hero">
-      <div>
+      <div class="hero-content">
         <h1 id="title">JanitorAI</h1>
         <p id="subtitle">Waiting for data.</p>
         <div class="meta" id="meta"></div>
@@ -28,8 +31,14 @@
     </div>
 
     <div class="actions top-actions">
-      <button class="btn btn-primary" id="collectBtn">Collect now</button>
-      <button class="btn" id="dashboardBtn">Open dashboard</button>
+      <button class="btn btn-primary" id="collectBtn">
+        <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        Collect Now
+      </button>
+      <button class="btn btn-secondary" id="dashboardBtn">
+        <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+        Open Dashboard
+      </button>
     </div>
 
     <div class="notice" id="notice">Open a JanitorAI character page to begin tracking.</div>

@@ -327,11 +327,20 @@ function render() {
       <article class="panel full empty-panel">
         <div class="empty">
           <h3>No tracked characters yet</h3>
-          <p>Get started immediately by exploring demo data or importing your character history.</p>
+          <p>Explore with a simulated demo dataset or import existing character history.</p>
           <div class="empty-actions">
-            <button class="btn btn-primary" id="emptyDemoBtn">✨ Load Demo Data</button>
-            <button class="btn" id="emptyAddBtn">➕ Add Entry</button>
-            <button class="btn" id="emptyImportBtn">📂 Import CSV</button>
+            <button class="btn btn-primary" id="emptyDemoBtn">
+              <svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z"/></svg>
+              Load Demo
+            </button>
+            <button class="btn btn-secondary" id="emptyAddBtn">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+              Add Entry
+            </button>
+            <button class="btn btn-secondary" id="emptyImportBtn">
+              <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5-5 5 5M12 5v12"/></svg>
+              Import CSV
+            </button>
           </div>
         </div>
       </article>`;
@@ -380,12 +389,6 @@ async function load() {
 }
 
 function setupEventListeners() {
-  const envBadge = document.getElementById("envBadge");
-  if (envBadge) {
-    envBadge.textContent = isExtension ? "⚡ Extension Connected" : "🌐 Web Tracker";
-    envBadge.classList.add(isExtension ? "badge-extension" : "badge-web");
-  }
-
   document.getElementById("characterSelect")?.addEventListener("change", async e => {
     state.activeCharacterId = e.target.value;
     await storage.set({ activeCharacterId: state.activeCharacterId });
@@ -471,6 +474,7 @@ function setupEventListeners() {
 
   // Modal event listeners
   document.getElementById("closeModalBtn")?.addEventListener("click", closeEntryModal);
+  document.getElementById("cancelModalBtn")?.addEventListener("click", closeEntryModal);
   document.getElementById("entryModalOverlay")?.addEventListener("click", (e) => {
     if (e.target.id === "entryModalOverlay") closeEntryModal();
   });
