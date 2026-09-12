@@ -478,6 +478,8 @@ function render() {
   if (titleEl) titleEl.textContent = character.characterName || "JanitorAI character";
   if (subtitleEl) subtitleEl.textContent = `Last collected ${lastSeen}`;
   renderMeta(character);
+  renderTrackingCountdown();
+  updateScraperStatusUI();
   renderCards();
   renderInsights();
   renderCharts();
@@ -656,6 +658,135 @@ function renderTrackingCountdown() {
 
   updateCountdown();
   countdownTimer = setInterval(updateCountdown, 30000);
+}
+
+let isExtensionDetected = isExtension;
+
+// Bridge listener for Chrome Extension presence
+window.addEventListener("message", (event) => {
+  if (event.data?.source === "JSTATS_EXTENSION" && event.data?.active) {
+    if (!isExtensionDetected) {
+      isExtensionDetected = true;
+      updateScraperStatusUI();
+    }
+  }
+});
+
+// Periodically ping extension bridge
+setInterval(() => {
+  window.postMessage({ source: "JSTATS_DASHBOARD", type: "PING_EXTENSION" }, "*");
+}, 4000);
+window.postMessage({ source: "JSTATS_DASHBOARD", type: "PING_EXTENSION" }, "*");
+
+function updateScraperStatusUI() {
+  const card = document.getElementById("scraperStatusCard");
+  if (!card) return;
+
+  const char = getCurrent();
+  if (!char) {
+    card.style.display = "none";
+    return;
+  }
+
+  const job = trackedJobs.find(j => (j.character_id || j.characterId) === char.characterId);
+  if (!job || job.status !== "active") {
+    card.style.display = "none";
+    return;
+  }
+
+  const snapCount = state.snapshots?.length || 0;
+
+  if (isExtensionDetected) {
+    card.style.display = "block";
+    card.innerHTML = `
+      <div class="scraper-banner is-active">
+        <div class="scraper-banner-left">
+          <span class="status-indicator-dot is-connected"></span>
+          <span><strong>Scraper Active:</strong> Chrome Extension connected • Scraping every 1m & syncing to Supabase</span>
+        </div>
+        <button type="button" class="btn-micro" id="manualScrapeTriggerBtn" data-tooltip="Trigger immediate scrape right now">
+          <svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+          <span>Scrape Now</span>
+        </button>
+      </div>
+    `;
+
+    const triggerBtn = document.getElementById("manualScrapeTriggerBtn");
+    if (triggerBtn) {
+      triggerBtn.onclick = async () => {
+        triggerBtn.disabled = true;
+        triggerBtn.innerHTML = `<span>Scraping...</span>`;
+        if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+          try {
+            await chrome.runtime.sendMessage({
+              type: "TRIGGER_SCRAPE_NOW",
+              payload: { characterId: char.characterId }
+            });
+          } catch {}
+        } else {
+          window.postMessage({
+            source: "JSTATS_DASHBOARD",
+            type: "TRIGGER_SCRAPE_NOW",
+            payload: { characterId: char.characterId }
+          }, "*");
+        }
+        setTimeout(async () => {
+          await render();
+          triggerBtn.disabled = false;
+          triggerBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+            <span>Scrape Now</span>
+          `;
+        }, 2500);
+      };
+    }
+    return;
+  }
+
+  // If extension is waiting / not loaded into Chrome
+  card.style.display = "block";
+  card.innerHTML = `
+    <div class="scraper-banner is-waiting">
+      <div class="scraper-banner-header">
+        <div class="scraper-banner-title">
+          <svg viewBox="0 0 24 24" class="scraper-warn-icon"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <strong>Scraper Extension Waiting (${snapCount} samples collected)</strong>
+        </div>
+        <span class="scraper-badge-pill">Free ($0) Background Engine</span>
+      </div>
+      <p class="scraper-banner-desc">
+        Your 72-hour tracking job is saved in Supabase. Because Vercel is a static web app, automated 1-minute scraping requires the JStats Chrome extension to be loaded in your Chrome browser:
+      </p>
+      <div class="scraper-setup-steps">
+        <div class="scraper-step">
+          <span class="step-num">1</span>
+          <span>Open <code>chrome://extensions</code> in Chrome</span>
+        </div>
+        <div class="scraper-step">
+          <span class="step-num">2</span>
+          <span>Turn on <strong>Developer mode</strong> (top-right toggle)</span>
+        </div>
+        <div class="scraper-step">
+          <span class="step-num">3</span>
+          <span>Click <strong>Load unpacked</strong> and select folder:</span>
+        </div>
+      </div>
+      <div class="scraper-path-box">
+        <code>/home/insomniac/Desktop/UNI/Apps/janitorai-stats-tracker</code>
+        <button type="button" class="btn-micro" id="copyExtPathBtn" data-tooltip="Copy path to clipboard">Copy Path</button>
+      </div>
+    </div>
+  `;
+
+  const copyBtn = document.getElementById("copyExtPathBtn");
+  if (copyBtn) {
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText("/home/insomniac/Desktop/UNI/Apps/janitorai-stats-tracker").then(() => {
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => { copyBtn.textContent = "Copy Path"; }, 2000);
+      });
+    };
+  }
 }
 
 async function updateCloudSyncIndicator() {

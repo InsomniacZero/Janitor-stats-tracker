@@ -83,9 +83,80 @@ chrome.runtime.onStartup.addListener(() => {
   initialize().catch(console.error);
 });
 
+// Map of pending background tab scrape resolvers: characterId -> (snapshot) => void
+const pendingTabScrapes = new Map();
+
 /**
- * Autonomously scrape bot stats from JanitorAI's internal API endpoint
- * using extension privileges (Datacat / Janny model).
+ * Fallback: Opens a silent, inactive tab to allow content.js to extract DOM stats
+ * with full Cloudflare clearance, then closes the tab automatically.
+ */
+export async function scrapeViaBackgroundTab(characterId, jobMetadata = null) {
+  if (typeof chrome === "undefined" || !chrome.tabs) return null;
+
+  const targetUrl = jobMetadata?.url || `https://janitorai.com/characters/${characterId}`;
+
+  // 1. Check if an active tab already exists for this character
+  try {
+    const existingTabs = await chrome.tabs.query({
+      url: [
+        `*://janitorai.com/characters/${characterId}*`,
+        `*://www.janitorai.com/characters/${characterId}*`
+      ]
+    });
+
+    if (existingTabs.length > 0 && existingTabs[0].id) {
+      const tabId = existingTabs[0].id;
+      try {
+        const res = await chrome.tabs.sendMessage(tabId, { type: "COLLECT_STATS" });
+        if (res?.ok && res?.snapshot) return res.snapshot;
+      } catch {}
+      await chrome.tabs.reload(tabId, { bypassCache: false }).catch(() => {});
+    }
+  } catch (e) {
+    console.debug("JStats: error querying existing tabs", e);
+  }
+
+  // 2. Open temporary inactive background tab
+  return new Promise((resolve) => {
+    let tempTab = null;
+    let timeoutId = null;
+
+    const cleanup = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      pendingTabScrapes.delete(characterId);
+      if (tempTab?.id) {
+        chrome.tabs.remove(tempTab.id).catch(() => {});
+      }
+    };
+
+    timeoutId = setTimeout(() => {
+      console.warn(`JStats: background tab scrape timed out for ${characterId}`);
+      cleanup();
+      resolve(null);
+    }, 18000);
+
+    pendingTabScrapes.set(characterId, (snapshot) => {
+      cleanup();
+      resolve(snapshot);
+    });
+
+    chrome.tabs.create({
+      url: targetUrl,
+      active: false // Keep background, do not interrupt user
+    }).then(created => {
+      tempTab = created;
+    }).catch(err => {
+      console.error("JStats: failed to open background tab for character", err);
+      cleanup();
+      resolve(null);
+    });
+  });
+}
+
+/**
+ * Autonomously scrape bot stats from JanitorAI
+ * 1. Tries internal API endpoint via extension privileges.
+ * 2. Falls back to silent inactive tab DOM extraction if API is protected or 401/403.
  */
 export async function scrapeCharacterById(characterId, jobMetadata = null) {
   if (!characterId) return null;
@@ -101,13 +172,15 @@ export async function scrapeCharacterById(characterId, jobMetadata = null) {
     });
 
     if (!res.ok) {
-      console.warn(`JStats: direct fetch returned HTTP ${res.status} for character ${characterId}`);
-      return null;
+      console.warn(`JStats: direct fetch returned HTTP ${res.status} for character ${characterId}; falling back to silent background tab`);
+      return await scrapeViaBackgroundTab(characterId, jobMetadata);
     }
 
     const json = await res.json();
     const raw = json.data?.character || json.data || json.character || json;
-    if (!raw) return null;
+    if (!raw) {
+      return await scrapeViaBackgroundTab(characterId, jobMetadata);
+    }
 
     const charName = raw.name || raw.character_name || jobMetadata?.character_name || "JanitorAI Character";
     const msgs = Number(
@@ -171,8 +244,8 @@ export async function scrapeCharacterById(characterId, jobMetadata = null) {
     console.debug(`JStats: Successfully scraped 1m snapshot for ${charName} (${characterId})`);
     return snapshot;
   } catch (err) {
-    console.error(`JStats: error scraping character ${characterId}:`, err);
-    return null;
+    console.warn(`JStats: direct fetch error for ${characterId}; falling back to silent background tab`, err);
+    return await scrapeViaBackgroundTab(characterId, jobMetadata);
   }
 }
 
@@ -311,6 +384,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // Forward to Supabase in real time
       await insertSnapshot(payload.characterId, snapshot);
+
+      // Resolve pending background tab scrape if waiting
+      if (pendingTabScrapes.has(payload.characterId)) {
+        const resolver = pendingTabScrapes.get(payload.characterId);
+        resolver(snapshot);
+      }
+
+      // Update last_scraped_at in Supabase job
+      try {
+        const config = await getSupabaseConfig();
+        if (config) {
+          fetch(`${config.url}/rest/v1/tracked_jobs?character_id=eq.${encodeURIComponent(payload.characterId)}`, {
+            method: "PATCH",
+            headers: {
+              apikey: config.anonKey,
+              Authorization: `Bearer ${config.anonKey}`,
+              "Content-Type": "application/json",
+              Prefer: "return=minimal"
+            },
+            body: JSON.stringify({
+              last_scraped_at: snapshot.timestamp,
+              character_name: payload.characterName || undefined
+            })
+          }).catch(() => {});
+        }
+      } catch {}
 
       const active = await chrome.storage.local.get("activeCharacterId");
       if (!active.activeCharacterId) {

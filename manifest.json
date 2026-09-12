@@ -26,6 +26,15 @@
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://janitor-stats-tracker.vercel.app/*",
+        "http://localhost:*/*",
+        "http://127.0.0.1:*/*"
+      ],
+      "js": ["content_bridge.js"],
+      "run_at": "document_start"
     }
   ],
   "action": {
