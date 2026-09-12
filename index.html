@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JanitorAI Stats Tracker</title>
+  <meta name="description" content="Local tracker and time-series analytics dashboard for JanitorAI character statistics.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Newsreader:ital,opsz,wght@0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-bar">
+      <div class="app-bar-inner">
+        <div class="brand">
+          <div class="brand-mark">J</div>
+          <div>
+            <div class="brand-title-wrap">
+              <span class="brand-title">JanitorAI Stats</span>
+              <span class="env-badge" id="envBadge">🌐 Web Tracker</span>
+            </div>
+            <div class="brand-sub">Private local character analytics & time-series trends</div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-secondary" id="demoBtn" title="Load sample character data to test">✨ Load Demo</button>
+          <button class="btn btn-secondary" id="addBtn" title="Add character snapshot manually">➕ Add Entry</button>
+          <button class="btn btn-secondary" id="importBtn" title="Import previously exported CSV">📂 Import CSV</button>
+          <button class="btn btn-secondary" id="exportBtn" title="Download data as CSV">📥 Export CSV</button>
+          <button class="btn btn-primary" id="collectBtn" title="Collect from active tab or log snapshot">⚡ Collect now</button>
+          <button class="btn btn-danger" id="clearBtn" title="Delete current character history">🗑️ Clear</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="hero">
+        <div class="hero-content">
+          <h1 id="title">JanitorAI Character</h1>
+          <p id="subtitle">Waiting for the first snapshot.</p>
+          <div class="meta" id="meta"></div>
+        </div>
+        <div class="hero-selector">
+          <label for="characterSelect" class="selector-label">Active Character</label>
+          <select class="select" id="characterSelect" aria-label="Tracked character"></select>
+        </div>
+      </div>
+
+      <div class="notice" id="notice" style="display: none;"></div>
+
+      <div class="toolbar">
+        <div class="range-label">Growth Window</div>
+        <div class="range-buttons" id="rangeControls"></div>
+      </div>
+
+      <section class="cards" id="cards"></section>
+      <section class="insights" id="insights"></section>
+      <section class="grid" id="charts"></section>
+
+      <div class="footer-note" id="footer"></div>
+    </main>
+  </div>
+
+  <!-- Hidden File Input for CSV Import -->
+  <input type="file" id="csvFileInput" accept=".csv,text/csv" style="display: none;">
+
+  <!-- Manual Entry Modal -->
+  <div class="modal-overlay" id="entryModalOverlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Record Character Snapshot</h3>
+        <button class="modal-close" id="closeModalBtn" aria-label="Close modal">&times;</button>
+      </div>
+      <form id="entryForm" class="modal-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="manualName">Character Name</label>
+            <input type="text" id="manualName" placeholder="e.g. Nyx Cybersmith" required>
+          </div>
+          <div class="form-group">
+            <label for="manualId">Character ID / Slug</label>
+            <input type="text" id="manualId" placeholder="Optional slug or UUID">
+          </div>
+        </div>
+        <div class="form-row form-grid-4">
+          <div class="form-group">
+            <label for="manualMsgs">Messages</label>
+            <input type="number" id="manualMsgs" placeholder="e.g. 52000" min="0" required>
+          </div>
+          <div class="form-group">
+            <label for="manualChats">Chats</label>
+            <input type="number" id="manualChats" placeholder="e.g. 1800" min="0" required>
+          </div>
+          <div class="form-group">
+            <label for="manualComments">Comments</label>
+            <input type="number" id="manualComments" placeholder="e.g. 240" min="0" required>
+          </div>
+          <div class="form-group">
+            <label for="manualFavourites">Favourites</label>
+            <input type="number" id="manualFavourites" placeholder="e.g. 750" min="0" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="manualPublishedChats">Published Chats (optional)</label>
+          <input type="number" id="manualPublishedChats" placeholder="e.g. 1200" min="0">
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn" onclick="document.getElementById('closeModalBtn').click()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Snapshot</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script type="module" src="./dashboard.js"></script>
+</body>
+</html>

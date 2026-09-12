@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>JanitorAI Stats</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="popup-body">
+  <header class="app-bar">
+    <div class="app-bar-inner">
+      <div class="brand">
+        <div class="brand-mark">J</div>
+        <div>
+          <div class="brand-title">JanitorAI Stats</div>
+          <div class="brand-sub">Live local tracking</div>
+        </div>
+      </div>
+    </div>
+  </header>
+  <main class="page">
+    <div class="hero">
+      <div>
+        <h1 id="title">JanitorAI</h1>
+        <p id="subtitle">Waiting for data.</p>
+        <div class="meta" id="meta"></div>
+      </div>
+    </div>
+
+    <div class="actions top-actions">
+      <button class="btn btn-primary" id="collectBtn">Collect now</button>
+      <button class="btn" id="dashboardBtn">Open dashboard</button>
+    </div>
+
+    <div class="notice" id="notice">Open a JanitorAI character page to begin tracking.</div>
+
+    <div class="toolbar compact-toolbar">
+      <div class="range-label">Window</div>
+      <div class="range-buttons" id="rangeControls"></div>
+    </div>
+
+    <section class="cards" id="cards"></section>
+    <section class="insights" id="insights"></section>
+    <section class="grid" id="charts"></section>
+  </main>
+
+  <script type="module" src="./popup.js"></script>
+</body>
+</html>
