@@ -173,41 +173,22 @@ button {
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
-.brand-mark {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-card);
-  border: 1px solid var(--color-border-medium);
-  color: var(--sage-primary);
-  display: grid;
-  place-items: center;
-  font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: 15px;
-  letter-spacing: -0.04em;
-}
-
-.brand-info {
-  display: flex;
-  flex-direction: column;
+.brand-logo {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  display: block;
 }
 
 .brand-title {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--color-text-primary);
-  line-height: 1.2;
-}
-
-.brand-sub {
-  color: var(--color-text-muted);
-  font-size: 12px;
-  line-height: 1.3;
+  line-height: 1;
 }
 
 .actions {
@@ -257,7 +238,14 @@ button {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 260px;
+  min-width: 280px;
+}
+
+.selector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .selector-label {
@@ -266,6 +254,169 @@ button {
   color: var(--color-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+.selector-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-micro {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.btn-micro svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
+.btn-micro:hover {
+  color: var(--sage-primary);
+  border-color: var(--color-border-medium);
+  background: var(--bg-card);
+}
+
+/* Ink2Obsidian Custom Select Dropdown */
+.custom-select-wrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.custom-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  background: var(--bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-sizing: border-box;
+}
+
+.custom-select-trigger:hover {
+  border-color: var(--color-border-medium);
+  background: var(--bg-card);
+}
+
+.custom-select-trigger.is-open {
+  border-color: var(--sage-primary);
+  box-shadow: 0 0 0 1px var(--sage-glow);
+}
+
+.custom-select-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.custom-select-chevron {
+  width: 14px;
+  height: 14px;
+  color: var(--sage-primary);
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  flex-shrink: 0;
+  margin-left: 8px;
+  opacity: 0.8;
+}
+
+.custom-select-trigger.is-open .custom-select-chevron {
+  transform: rotate(180deg);
+}
+
+.custom-select-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background-color: var(--bg-card);
+  border: 1px solid var(--color-border-medium);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 280px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.custom-select-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: var(--radius-xs);
+  border: none;
+  background-color: transparent;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.custom-select-item:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.custom-select-item.is-selected {
+  background-color: rgba(129, 178, 154, 0.12);
+  color: var(--sage-primary);
+  font-weight: 600;
+}
+
+.custom-select-item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-select-check {
+  width: 13px;
+  height: 13px;
+  color: var(--sage-primary);
+  stroke: currentColor;
+  stroke-width: 2.5;
+  fill: none;
+  flex-shrink: 0;
+  margin-left: 8px;
 }
 
 .meta {
@@ -838,11 +989,82 @@ select.select:focus {
   font-size: 13px;
   outline: none;
   transition: border-color 150ms ease;
+  box-sizing: border-box;
 }
 
 .form-group input:focus {
   border-color: var(--sage-primary);
   box-shadow: 0 0 0 1px var(--sage-glow);
+}
+
+/* Custom Number Stepper (Eliminate Ugly Default White Spinners) */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.number-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.number-input-wrap input[type="number"] {
+  padding-right: 28px;
+  font-family: var(--font-mono);
+}
+
+.stepper-controls {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  bottom: 2px;
+  width: 22px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border-left: 1px solid var(--color-border-subtle);
+  background: var(--bg-secondary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.stepper-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 50%;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.stepper-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--sage-primary);
+}
+
+.stepper-btn:active {
+  background: rgba(129, 178, 154, 0.2);
+  color: var(--sage-light);
+}
+
+.stepper-btn svg {
+  width: 9px;
+  height: 9px;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  fill: none;
 }
 
 .modal-actions {

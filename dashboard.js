@@ -366,14 +366,107 @@ function render() {
 }
 
 function populateCharacterSelect() {
-  const select = document.getElementById("characterSelect");
-  if (!select) return;
-  if (!state.characters.length) {
-    select.innerHTML = `<option value="">No characters</option>`;
-    return;
+  const current = getCurrent();
+  const currentLabel = document.getElementById("charSelectCurrent");
+  const menu = document.getElementById("charSelectMenu");
+  const nativeSelect = document.getElementById("characterSelect");
+
+  if (nativeSelect) {
+    if (!state.characters.length) {
+      nativeSelect.innerHTML = `<option value="">No characters</option>`;
+    } else {
+      nativeSelect.innerHTML = state.characters
+        .map(c => `<option value="${escapeHtml(c.characterId)}">${escapeHtml(c.characterName || c.characterId)}</option>`)
+        .join("");
+      if (state.activeCharacterId) nativeSelect.value = state.activeCharacterId;
+    }
   }
-  select.innerHTML = state.characters.map(c => `<option value="${escapeHtml(c.characterId)}">${escapeHtml(c.characterName || c.characterId)}</option>`).join("");
-  if (state.activeCharacterId) select.value = state.activeCharacterId;
+
+  if (currentLabel) {
+    currentLabel.textContent = current ? (current.characterName || current.characterId) : "Select a character...";
+  }
+
+  if (menu) {
+    if (!state.characters.length) {
+      menu.innerHTML = `<div class="custom-select-item" style="color: var(--color-text-muted); cursor: default;">No characters yet</div>`;
+      return;
+    }
+
+    menu.innerHTML = state.characters.map(c => {
+      const isSelected = c.characterId === state.activeCharacterId;
+      const checkSvg = isSelected
+        ? `<svg class="custom-select-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>`
+        : "";
+      return `
+        <button type="button" class="custom-select-item ${isSelected ? "is-selected" : ""}" data-id="${escapeHtml(c.characterId)}" role="option" aria-selected="${isSelected}">
+          <span class="custom-select-item-text">${escapeHtml(c.characterName || c.characterId)}</span>
+          ${checkSvg}
+        </button>`;
+    }).join("");
+
+    menu.querySelectorAll(".custom-select-item[data-id]").forEach(item => {
+      item.addEventListener("click", async () => {
+        const id = item.dataset.id;
+        state.activeCharacterId = id;
+        await storage.set({ activeCharacterId: id });
+        closeCustomSelect();
+        const character = getCurrent();
+        state.snapshots = character ? await getSnapshots(character.characterId) : [];
+        populateCharacterSelect();
+        render();
+      });
+    });
+  }
+}
+
+function toggleCustomSelect() {
+  const trigger = document.getElementById("charSelectTrigger");
+  const menu = document.getElementById("charSelectMenu");
+  if (!trigger || !menu) return;
+  const isOpen = trigger.classList.contains("is-open");
+  if (isOpen) {
+    closeCustomSelect();
+  } else {
+    trigger.classList.add("is-open");
+    trigger.setAttribute("aria-expanded", "true");
+    menu.style.display = "flex";
+  }
+}
+
+function closeCustomSelect() {
+  const trigger = document.getElementById("charSelectTrigger");
+  const menu = document.getElementById("charSelectMenu");
+  if (trigger) {
+    trigger.classList.remove("is-open");
+    trigger.setAttribute("aria-expanded", "false");
+  }
+  if (menu) {
+    menu.style.display = "none";
+  }
+}
+
+function setupStepperControls() {
+  document.querySelectorAll(".stepper-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      const targetId = btn.dataset.target;
+      const input = targetId ? document.getElementById(targetId) : btn.closest(".number-input-wrap")?.querySelector('input[type="number"]');
+      if (!input) return;
+
+      const isUp = btn.classList.contains("stepper-up");
+      const step = e.shiftKey ? 10 : 1;
+      let val = Number(input.value) || 0;
+
+      if (isUp) {
+        val += step;
+      } else {
+        val = Math.max(0, val - step);
+      }
+
+      input.value = val;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  });
 }
 
 async function load() {
@@ -389,11 +482,33 @@ async function load() {
 }
 
 function setupEventListeners() {
+  document.getElementById("charSelectTrigger")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleCustomSelect();
+  });
+
+  document.addEventListener("click", (e) => {
+    const wrap = document.getElementById("characterCustomSelect");
+    if (wrap && !wrap.contains(e.target)) {
+      closeCustomSelect();
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeCustomSelect();
+      closeEntryModal();
+    }
+  });
+
+  setupStepperControls();
+
   document.getElementById("characterSelect")?.addEventListener("change", async e => {
     state.activeCharacterId = e.target.value;
     await storage.set({ activeCharacterId: state.activeCharacterId });
     const character = getCurrent();
     state.snapshots = character ? await getSnapshots(character.characterId) : [];
+    populateCharacterSelect();
     render();
   });
 

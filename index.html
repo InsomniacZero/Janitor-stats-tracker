@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>JanitorAI Stats Tracker</title>
-  <meta name="description" content="Private, local time-series analytics and trend tracking for JanitorAI character statistics.">
+  <title>JStats</title>
+  <meta name="description" content="Private, local statistics and character analytics for JanitorAI.">
+  <link rel="icon" type="image/webp" href="./logo.webp">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -15,25 +16,10 @@
     <header class="app-bar">
       <div class="app-bar-inner">
         <div class="brand">
-          <div class="brand-mark">J</div>
-          <div class="brand-info">
-            <span class="brand-title">JanitorAI Stats</span>
-            <span class="brand-sub">Time-series analytics & trend tracker</span>
-          </div>
+          <img src="./logo.webp" alt="JStats" class="brand-logo">
+          <span class="brand-title">JStats</span>
         </div>
         <div class="actions">
-          <button class="btn btn-secondary" id="demoBtn" title="Load sample character dataset">
-            <svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z"/></svg>
-            Load Demo
-          </button>
-          <button class="btn btn-secondary" id="addBtn" title="Record character snapshot manually">
-            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-            Add Entry
-          </button>
-          <button class="btn btn-secondary" id="importBtn" title="Import previously exported CSV">
-            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5-5 5 5M12 5v12"/></svg>
-            Import CSV
-          </button>
           <button class="btn btn-secondary" id="exportBtn" title="Export character history as CSV">
             <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
             Export CSV
@@ -58,8 +44,31 @@
           <div class="meta" id="meta"></div>
         </div>
         <div class="hero-selector">
-          <label for="characterSelect" class="selector-label">Active Character</label>
-          <select class="select" id="characterSelect" aria-label="Tracked character"></select>
+          <div class="selector-header">
+            <span class="selector-label">Active Character</span>
+            <div class="selector-quick-actions">
+              <button type="button" class="btn-micro" id="addBtn" title="Record character snapshot manually">
+                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+                <span>Entry</span>
+              </button>
+              <button type="button" class="btn-micro" id="importBtn" title="Import CSV">
+                <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5-5 5 5M12 5v12"/></svg>
+                <span>Import</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Ink2Obsidian-style Custom Select -->
+          <div class="custom-select-wrap" id="characterCustomSelect">
+            <button type="button" class="custom-select-trigger" id="charSelectTrigger" aria-haspopup="listbox" aria-expanded="false">
+              <span class="custom-select-label" id="charSelectCurrent">Select a character...</span>
+              <svg class="custom-select-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div class="custom-select-menu" id="charSelectMenu" role="listbox" style="display: none;"></div>
+          </div>
+
+          <!-- Hidden native select for accessibility/tests -->
+          <select class="select" id="characterSelect" aria-label="Tracked character" style="display: none;"></select>
         </div>
       </div>
 
@@ -102,24 +111,74 @@
         <div class="form-row form-grid-4">
           <div class="form-group">
             <label for="manualMsgs">Messages</label>
-            <input type="number" id="manualMsgs" placeholder="52000" min="0" required>
+            <div class="number-input-wrap">
+              <input type="number" id="manualMsgs" placeholder="52000" min="0" required>
+              <div class="stepper-controls">
+                <button type="button" class="stepper-btn stepper-up" data-target="manualMsgs" aria-label="Increase messages">
+                  <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
+                </button>
+                <button type="button" class="stepper-btn stepper-down" data-target="manualMsgs" aria-label="Decrease messages">
+                  <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+              </div>
+            </div>
           </div>
           <div class="form-group">
             <label for="manualChats">Chats</label>
-            <input type="number" id="manualChats" placeholder="1800" min="0" required>
+            <div class="number-input-wrap">
+              <input type="number" id="manualChats" placeholder="1800" min="0" required>
+              <div class="stepper-controls">
+                <button type="button" class="stepper-btn stepper-up" data-target="manualChats" aria-label="Increase chats">
+                  <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
+                </button>
+                <button type="button" class="stepper-btn stepper-down" data-target="manualChats" aria-label="Decrease chats">
+                  <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+              </div>
+            </div>
           </div>
           <div class="form-group">
             <label for="manualComments">Comments</label>
-            <input type="number" id="manualComments" placeholder="240" min="0" required>
+            <div class="number-input-wrap">
+              <input type="number" id="manualComments" placeholder="240" min="0" required>
+              <div class="stepper-controls">
+                <button type="button" class="stepper-btn stepper-up" data-target="manualComments" aria-label="Increase comments">
+                  <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
+                </button>
+                <button type="button" class="stepper-btn stepper-down" data-target="manualComments" aria-label="Decrease comments">
+                  <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+              </div>
+            </div>
           </div>
           <div class="form-group">
             <label for="manualFavourites">Favourites</label>
-            <input type="number" id="manualFavourites" placeholder="750" min="0" required>
+            <div class="number-input-wrap">
+              <input type="number" id="manualFavourites" placeholder="750" min="0" required>
+              <div class="stepper-controls">
+                <button type="button" class="stepper-btn stepper-up" data-target="manualFavourites" aria-label="Increase favourites">
+                  <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
+                </button>
+                <button type="button" class="stepper-btn stepper-down" data-target="manualFavourites" aria-label="Decrease favourites">
+                  <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="form-group">
           <label for="manualPublishedChats">Published Chats (optional)</label>
-          <input type="number" id="manualPublishedChats" placeholder="1200" min="0">
+          <div class="number-input-wrap">
+            <input type="number" id="manualPublishedChats" placeholder="1200" min="0">
+            <div class="stepper-controls">
+              <button type="button" class="stepper-btn stepper-up" data-target="manualPublishedChats" aria-label="Increase published chats">
+                <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
+              </button>
+              <button type="button" class="stepper-btn stepper-down" data-target="manualPublishedChats" aria-label="Decrease published chats">
+                <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+            </div>
+          </div>
         </div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" id="cancelModalBtn">Cancel</button>

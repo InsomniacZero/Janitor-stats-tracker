@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "JanitorAI Stats Tracker",
-  "version": "1.2.0",
-  "description": "Track JanitorAI character messages, chats, comments and favourites over time.",
+  "name": "JStats",
+  "version": "1.3.0",
+  "description": "Private local statistics and character analytics tracker for JanitorAI.",
   "permissions": [
     "storage",
     "unlimitedStorage",
@@ -28,8 +28,12 @@
     }
   ],
   "action": {
-    "default_title": "JanitorAI Stats Tracker",
-    "default_popup": "popup.html"
+    "default_title": "JStats",
+    "default_popup": "popup.html",
+    "default_icon": "logo.webp"
+  },
+  "icons": {
+    "128": "logo.webp"
   },
   "options_page": "dashboard.html"
 }

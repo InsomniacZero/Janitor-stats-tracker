@@ -1,19 +1,19 @@
-# JanitorAI Stats Tracker 📊
+# JStats
 
-A private, client-side time-series analytics dashboard and tracker for JanitorAI character statistics. Built with **Vite**, deployable directly to **Vercel**, and fully compatible as a **Chrome Manifest V3 Extension**.
+A private, client-side statistics dashboard and tracker for JanitorAI character metrics. Built with **Vite**, deployable directly to **Vercel**, and fully compatible as an unpacked **Chrome Manifest V3 Extension**.
 
 ---
 
 ## Features
 
-- 📈 **Time-Series Charts**: Dedicated charts for every tracked metric with exact interactive hover tooltips (timestamp, delta, percentage change, elapsed time).
-- 🧬 **Combined Normalized Trends**: Index all tracked series to 100 at window start to contrast relative growth rates.
-- ⏱️ **Flexible Growth Windows**: Inspect data over `1h`, `6h`, `24h`, `7d`, `30d`, and `All`.
-- 🧮 **Engagement Ratios & Velocity**: Real-time calculations for messages per chat, chats per 1k messages, favourites per chat, comments velocity, and growth rates per hour.
-- 💾 **100% Private Local Storage**: Stores time-series data locally in the browser's `IndexedDB` storage. No analytics or metrics are sent to any external server.
-- ✨ **Demo Data Mode**: Test and explore all charts and analytics with 1-click sample generation.
-- 📂 **CSV Import & Export**: Seamlessly backup, restore, and transfer character history between browsers and devices.
-- ➕ **Manual Snapshot Entry**: Log and track statistics directly through the web interface without needing the extension.
+- **Time-Series Charts**: Dedicated charts for every tracked metric with exact interactive hover tooltips (timestamp, delta, percentage change, elapsed time).
+- **Combined Normalized Trends**: Index all tracked series to 100 at window start to contrast relative growth rates.
+- **Flexible Growth Windows**: Inspect data over `1h`, `6h`, `24h`, `7d`, `30d`, and `All`.
+- **Engagement Ratios & Velocity**: Real-time calculations for messages per chat, chats per 1k messages, favourites per chat, comments velocity, and growth rates per hour.
+- **100% Private Local Storage**: Stores time-series data locally in the browser's `IndexedDB` storage. No analytics or metrics are sent to any external server.
+- **Demo Data Mode**: Test and explore all charts and analytics with 1-click sample generation.
+- **CSV Import & Export**: Seamlessly backup, restore, and transfer character history between browsers and devices.
+- **Manual Snapshot Entry**: Log and track statistics directly through the web interface with custom number steppers.
 
 ---
 
