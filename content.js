@@ -98,22 +98,221 @@ function getDateMeta() {
   return result;
 }
 
-function extractStats() {
+/**
+ * Attempt to extract exact, unrounded single-digit counts for messages and chats
+ * using all available client-side sources on JanitorAI:
+ * 1. First-party internal API fetch with session token from localStorage
+ * 2. Next.js embedded data scripts (__NEXT_DATA__ or React Server Components)
+ * 3. Element attributes (title, aria-label, data-tooltip) on the stats ribbon
+ */
+async function getExactStats(characterId) {
+  // 1. First-party API fetch from inside the page
+  try {
+    let token = null;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.includes("auth-token") || k.includes("supabase") || k.includes("token"))) {
+          const raw = localStorage.getItem(k);
+          const parsed = JSON.parse(raw);
+          token = parsed?.access_token || parsed?.currentSession?.access_token || (Array.isArray(parsed) && parsed[0]?.access_token) || token;
+        }
+      }
+    } catch {}
+
+    const headers = { Accept: "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const res = await fetch(`/hampter/characters/${characterId}`, {
+      credentials: "include",
+      headers
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      const raw = json.data?.character || json.data || json.character || json;
+      if (raw) {
+        const msgs = Number(
+          raw.stats?.message ?? raw.stats?.messages ?? raw.stats?.msgs ??
+          raw.total_message ?? raw.message ?? raw.msgs
+        );
+        const chats = Number(
+          raw.stats?.chat ?? raw.stats?.chats ?? raw.chats ?? raw.chat ?? raw.chat_count
+        );
+        const favourites = Number(
+          raw.stats?.favorite ?? raw.stats?.favourite ?? raw.stats?.favorites ?? raw.stats?.favourites ??
+          raw.favourites ?? raw.favorites ?? raw.favorite
+        );
+        const comments = Number(
+          raw.stats?.comment ?? raw.stats?.comments ?? raw.comments ?? raw.comment
+        );
+
+        if (Number.isFinite(msgs) && Number.isFinite(chats) && (msgs > 0 || chats > 0)) {
+          console.debug("JStats: Got exact single-digit stats from /hampter/ API:", { msgs, chats, favourites, comments });
+          return {
+            msgs,
+            msgsDisplay: msgs.toLocaleString(),
+            chats,
+            chatsDisplay: chats.toLocaleString(),
+            favourites: Number.isFinite(favourites) && favourites > 0 ? favourites : null,
+            favouritesDisplay: Number.isFinite(favourites) && favourites > 0 ? favourites.toLocaleString() : null,
+            comments: Number.isFinite(comments) && comments >= 0 ? comments : null,
+            commentsDisplay: Number.isFinite(comments) && comments >= 0 ? comments.toLocaleString() : null
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.debug("JStats: /hampter/ fetch inside content script failed", e);
+  }
+
+  // 2. Next.js script tags (__NEXT_DATA__ or RSC hydration chunks)
+  try {
+    const scripts = document.getElementsByTagName("script");
+    for (let i = 0; i < scripts.length; i++) {
+      const txt = scripts[i].textContent;
+      if (!txt || txt.length < 50) continue;
+
+      if (scripts[i].id === "__NEXT_DATA__") {
+        try {
+          const parsed = JSON.parse(txt);
+          const pageProps = parsed.props?.pageProps;
+          const char = pageProps?.character || pageProps?.initialData?.character || pageProps?.data?.character;
+          if (char?.stats) {
+            const msgs = Number(char.stats.message ?? char.stats.messages ?? char.total_message);
+            const chats = Number(char.stats.chat ?? char.stats.chats ?? char.total_chat);
+            if (Number.isFinite(msgs) && Number.isFinite(chats) && (msgs > 0 || chats > 0)) {
+              return {
+                msgs,
+                msgsDisplay: msgs.toLocaleString(),
+                chats,
+                chatsDisplay: chats.toLocaleString()
+              };
+            }
+          }
+        } catch {}
+      }
+
+      if (txt.includes('"message"') && txt.includes('"chat"')) {
+        const match = txt.match(/"stats":\s*\{([^}]+)\}/);
+        if (match) {
+          const statsStr = match[1];
+          const mMsg = statsStr.match(/"message(?:s)?"\s*:\s*(\d+)/);
+          const mChat = statsStr.match(/"chat(?:s)?"\s*:\s*(\d+)/);
+          if (mMsg && mChat) {
+            const msgs = Number(mMsg[1]);
+            const chats = Number(mChat[1]);
+            if (Number.isFinite(msgs) && Number.isFinite(chats) && (msgs > 0 || chats > 0)) {
+              return {
+                msgs,
+                msgsDisplay: msgs.toLocaleString(),
+                chats,
+                chatsDisplay: chats.toLocaleString()
+              };
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.debug("JStats: script tag inspection failed", e);
+  }
+
+  // 3. DOM attributes & Tooltips on ribbon elements
+  try {
+    const ribbon = document.querySelector(".character-chat-messages-stat-ribbon-tag-hstack");
+    if (ribbon) {
+      const candidates = [ribbon, ...ribbon.querySelectorAll("*")];
+      let exactMsgs = null;
+      let exactChats = null;
+
+      for (const el of candidates) {
+        for (const attr of ["title", "aria-label", "data-tooltip", "data-label", "data-original-title"]) {
+          const val = el.getAttribute(attr);
+          if (!val) continue;
+          const cleanNum = val.replace(/,/g, "").trim();
+          const m = cleanNum.match(/(\d{4,12})/);
+          if (m) {
+            const n = Number(m[1]);
+            const lower = val.toLowerCase();
+            if (lower.includes("msg") || lower.includes("message")) {
+              exactMsgs = n;
+            } else if (lower.includes("chat")) {
+              exactChats = n;
+            }
+          }
+        }
+      }
+
+      if (Number.isFinite(exactMsgs) && Number.isFinite(exactChats)) {
+        return {
+          msgs: exactMsgs,
+          msgsDisplay: exactMsgs.toLocaleString(),
+          chats: exactChats,
+          chatsDisplay: exactChats.toLocaleString()
+        };
+      }
+
+      // Simulate mouseenter on ribbon to trigger Chakra tooltip if present
+      for (const p of ribbon.querySelectorAll("p")) {
+        p.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+      }
+      await new Promise(r => setTimeout(r, 60));
+      const tooltips = document.querySelectorAll('[role="tooltip"], .chakra-tooltip');
+      for (const tip of tooltips) {
+        const tipText = tip.textContent || "";
+        const m = tipText.replace(/,/g, "").match(/(\d{4,12})/);
+        if (m) {
+          const n = Number(m[1]);
+          const lower = tipText.toLowerCase();
+          if (lower.includes("msg") || lower.includes("message")) exactMsgs = n;
+          else if (lower.includes("chat")) exactChats = n;
+        }
+      }
+
+      if (Number.isFinite(exactMsgs) && Number.isFinite(exactChats)) {
+        return {
+          msgs: exactMsgs,
+          msgsDisplay: exactMsgs.toLocaleString(),
+          chats: exactChats,
+          chatsDisplay: exactChats.toLocaleString()
+        };
+      }
+    }
+  } catch (e) {
+    console.debug("JStats: DOM attribute inspection failed", e);
+  }
+
+  return null;
+}
+
+async function extractStats() {
+  const charId = getCharacterId();
+  const exact = await getExactStats(charId);
+
   const messageChat = getMessagesAndChats();
   const favourites = getFavourites();
   const comments = getComments();
   const publishedChats = getPublishedChats();
   const dates = getDateMeta();
 
+  const msgs = exact?.msgs ?? messageChat.msgs;
+  const msgsDisplay = exact?.msgsDisplay ?? messageChat.msgsDisplay;
+  const chats = exact?.chats ?? messageChat.chats;
+  const chatsDisplay = exact?.chatsDisplay ?? messageChat.chatsDisplay;
+
   return {
-    characterId: getCharacterId(),
+    characterId: charId,
     characterName: getCharacterName(),
     url: location.href,
-    ...messageChat,
-    comments: comments.comments,
-    commentsDisplay: comments.commentsDisplay,
-    favourites: favourites.favourites,
-    favouritesDisplay: favourites.favouritesDisplay,
+    msgs,
+    msgsDisplay,
+    chats,
+    chatsDisplay,
+    comments: exact?.comments ?? comments.comments,
+    commentsDisplay: exact?.commentsDisplay ?? comments.commentsDisplay,
+    favourites: exact?.favourites ?? favourites.favourites,
+    favouritesDisplay: exact?.favouritesDisplay ?? favourites.favouritesDisplay,
     publishedChats: publishedChats.publishedChats,
     publishedChatsDisplay: publishedChats.publishedChatsDisplay,
     ...dates
@@ -131,7 +330,7 @@ async function sendSnapshot(stats) {
 async function collectWhenReady({ attempts = 14, delayMs = 900 } = {}) {
   let zeroCommentsStreak = 0;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const stats = extractStats();
+    const stats = await extractStats();
     if (statsAreComplete(stats)) {
       // JanitorAI briefly renders comments as 0 during page hydration on reload.
       // Require two consecutive zero reads before accepting a real zero.
@@ -152,7 +351,8 @@ async function collectWhenReady({ attempts = 14, delayMs = 900 } = {}) {
     await new Promise(resolve => setTimeout(resolve, delayMs));
   }
 
-  console.warn("JanitorAI Stats Tracker: stats never became ready", location.href, extractStats());
+  const fallback = await extractStats();
+  console.warn("JanitorAI Stats Tracker: stats never became ready", location.href, fallback);
   return { ok: false, reason: "STATS_NOT_READY" };
 }
 

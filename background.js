@@ -153,9 +153,76 @@ export async function scrapeViaBackgroundTab(characterId, jobMetadata = null) {
   });
 }
 
+function extractTokenFromString(raw) {
+  if (!raw) return null;
+  try {
+    const decoded = decodeURIComponent(raw);
+    const parsed = JSON.parse(decoded);
+    const token = parsed?.access_token || (Array.isArray(parsed) && parsed[0]?.access_token);
+    if (token && typeof token === "string" && token.startsWith("ey")) return token;
+  } catch {}
+
+  try {
+    if (raw.startsWith("base64-")) {
+      const b64 = atob(raw.slice(7));
+      const parsed = JSON.parse(b64);
+      const token = parsed?.access_token || (Array.isArray(parsed) && parsed[0]?.access_token);
+      if (token && typeof token === "string" && token.startsWith("ey")) return token;
+    }
+  } catch {}
+
+  const jwtMatch = String(raw).match(/(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})/);
+  if (jwtMatch) return jwtMatch[1];
+
+  return null;
+}
+
+/**
+ * Retrieves the user's JanitorAI session JWT from Chrome cookies if present.
+ * Handles multi-cookie chunking used by Supabase Auth (e.g. .0, .1).
+ */
+async function getJanitorToken() {
+  if (typeof chrome === "undefined" || !chrome.cookies) return null;
+  try {
+    const cookies = await chrome.cookies.getAll({ domain: "janitorai.com" });
+    const chunks = new Map();
+    const singles = [];
+
+    for (const c of cookies) {
+      if (!c.name.includes("auth-token")) continue;
+      const match = c.name.match(/^(.*?)\.(\d+)$/);
+      if (match) {
+        const baseName = match[1];
+        const idx = Number(match[2]);
+        if (!chunks.has(baseName)) chunks.set(baseName, []);
+        chunks.get(baseName).push({ idx, value: c.value });
+      } else {
+        singles.push(c.value);
+      }
+    }
+
+    // Try chunked cookies first (concatenated by index order)
+    for (const [, list] of chunks.entries()) {
+      list.sort((a, b) => a.idx - b.idx);
+      const combined = list.map(x => x.value).join("");
+      const token = extractTokenFromString(combined);
+      if (token) return token;
+    }
+
+    // Try single cookies
+    for (const val of singles) {
+      const token = extractTokenFromString(val);
+      if (token) return token;
+    }
+  } catch (e) {
+    console.debug("JStats: error reading janitorai cookies", e);
+  }
+  return null;
+}
+
 /**
  * Autonomously scrape bot stats from JanitorAI
- * 1. Tries internal API endpoint via extension privileges.
+ * 1. Tries internal API endpoint with user session token via extension privileges.
  * 2. Falls back to silent inactive tab DOM extraction if API is protected or 401/403.
  */
 export async function scrapeCharacterById(characterId, jobMetadata = null) {
@@ -163,12 +230,18 @@ export async function scrapeCharacterById(characterId, jobMetadata = null) {
 
   try {
     const endpoint = `https://janitorai.com/hampter/characters/${characterId}`;
+    const token = await getJanitorToken();
+    const headers = {
+      Accept: "application/json, text/plain, */*",
+      Referer: "https://janitorai.com/"
+    };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
     const res = await fetch(endpoint, {
       credentials: "include",
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        Referer: "https://janitorai.com/"
-      }
+      headers
     });
 
     if (!res.ok) {
