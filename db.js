@@ -130,6 +130,9 @@ async function saveCharacterSnapshot(character, snapshot) {
 
       existing.characterName = character.characterName || existing.characterName;
       existing.url = character.url || existing.url;
+      existing.avatar = character.avatar || existing.avatar || null;
+      existing.creator = character.creator || existing.creator || null;
+      existing.creatorAvatar = character.creatorAvatar || existing.creatorAvatar || null;
       existing.createdAt = character.createdAt || existing.createdAt;
       existing.updatedAt = character.updatedAt || existing.updatedAt;
       existing.publishedAt = character.publishedAt || existing.publishedAt;

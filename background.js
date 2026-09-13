@@ -312,11 +312,13 @@ export async function processAndSaveScrapedCharacter(cleanId, raw, jobMetadata =
   const pubVal = raw.stats?.publishedChats ?? raw.stats?.published_chats ?? raw.publishedChats ?? raw.published_chats;
   const publishedChats = pubVal != null ? Number(pubVal) : null;
 
+  const creator = raw.creator || raw.creator_name || raw.creator?.name || raw.creator_username || (typeof raw.creator === "string" ? raw.creator : null) || raw.user?.name || jobMetadata?.creator || null;
   const charMetadata = {
     characterId: cleanId,
     characterName: charName,
     url: jobMetadata?.url || `https://janitorai.com/characters/${cleanId}`,
     avatar: raw.avatar || null,
+    creator,
     createdAt: raw.created_at || raw.createdAt || jobMetadata?.createdAt || null,
     updatedAt: raw.updated_at || raw.updatedAt || new Date().toISOString(),
     publishedAt: raw.published_at || raw.publishedAt || jobMetadata?.publishedAt || null,

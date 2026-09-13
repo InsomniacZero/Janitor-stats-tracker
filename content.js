@@ -73,6 +73,8 @@ async function checkAndAutoSaveTrackedFeedCharacters(characters) {
       const snapshotPayload = {
         characterId: cleanId,
         characterName: char.characterName || job.character_name || "JanitorAI Character",
+        avatar: char.avatar || null,
+        creator: char.creator || null,
         url: job.url || char.url || `https://janitorai.com/characters/${cleanId}`,
         msgs: char.msgs,
         msgsDisplay: char.msgsDisplay || char.msgs.toLocaleString(),
@@ -547,9 +549,16 @@ async function extractStats() {
   const chats = isExact ? exact.chats : messageChat.chats;
   const chatsDisplay = isExact ? exact.chatsDisplay : messageChat.chatsDisplay;
 
+  const avatarEl = document.querySelector('img[src*="bot-avatars"], img[src*="characters"], .character-avatar img');
+  const avatar = exact?.avatar || avatarEl?.src || null;
+  const creatorEl = document.querySelector('a[href*="/profiles/"], a[href^="/@"]');
+  const creator = exact?.creator || creatorEl?.textContent?.replace(/^@|\s+/g, "") || null;
+
   return {
     characterId: charId,
     characterName: getCharacterName(),
+    avatar,
+    creator,
     url: location.href,
     msgs,
     msgsDisplay,

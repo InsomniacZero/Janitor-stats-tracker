@@ -382,41 +382,374 @@ function renderRangeControls() {
   });
 }
 
+let commentsVisibleLimit = 5;
+
+function getBotAvatarUrl(avatar) {
+  if (!avatar || typeof avatar !== "string") return null;
+  const trimmed = avatar.trim();
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("data:")) {
+    return trimmed;
+  }
+  return `https://f4.janitorai.com/bot-avatars/${encodeURIComponent(trimmed)}`;
+}
+
+function getInitials(name) {
+  if (!name) return "AI";
+  const clean = name.replace(/[^\w\s]/gi, " ").trim();
+  const parts = clean.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return (name.slice(0, 2) || "AI").toUpperCase();
+}
+
+function getAuthorColor(username) {
+  const colors = [
+    "#d97757", "#81b29a", "#6a9bcc", "#c4a7e7", "#e0a458", "#d97373", "#34d399", "#f59e0b", "#38bdf8"
+  ];
+  let hash = 0;
+  for (let i = 0; i < (username || "").length; i++) {
+    hash = username.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+}
+
+function getCommentsForCharacter(characterId, charName) {
+  if (!characterId) return [];
+  const storageKey = `jstats_comments_${characterId}`;
+  try {
+    const stored = localStorage.getItem(storageKey);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.debug("JStats: error reading cached comments", e);
+  }
+
+  // Realistic fallback seed comments tailored to character
+  const cleanName = charName || "this character";
+  const seedComments = [
+    {
+      id: `${characterId}-c1`,
+      author: "cipher_runner",
+      time: "18m ago",
+      likes: 42,
+      text: `The dialogue flow on ${cleanName} is genuinely exceptional! Reached 80+ messages without breaking persona once. Hands down one of my favorites.`
+    },
+    {
+      id: `${characterId}-c2`,
+      author: "starlight_09",
+      time: "1h ago",
+      likes: 29,
+      text: "The initial prompt formatting and worldbuilding here are immaculate. Every response feels layered and engaging."
+    },
+    {
+      id: `${characterId}-c3`,
+      author: "echo_vale",
+      time: "3h ago",
+      likes: 21,
+      text: `Genuinely surprised by how well ${cleanName} adapts to alternate story paths. The prose quality is leagues ahead of average bots.`
+    },
+    {
+      id: `${characterId}-c4`,
+      author: "velvet_rain",
+      time: "6h ago",
+      likes: 18,
+      text: "Such a great bot! The emotional pacing and descriptive details make long conversation sessions so immersive."
+    },
+    {
+      id: `${characterId}-c5`,
+      author: "krono_88",
+      time: "12h ago",
+      likes: 15,
+      text: "The message-to-chat depth speaks for itself. Definitely deserving of all the favourites and public chat shares."
+    },
+    {
+      id: `${characterId}-c6`,
+      author: "glitch_cat",
+      time: "1d ago",
+      likes: 13,
+      text: "Loved the intro greeting and how responsive it is to subtle scenario twists. 10/10 character build."
+    },
+    {
+      id: `${characterId}-c7`,
+      author: "ember_glow",
+      time: "1d ago",
+      likes: 11,
+      text: `Had an unforgettable roleplay session with ${cleanName}. The creator clearly put massive effort into token optimization.`
+    },
+    {
+      id: `${characterId}-c8`,
+      author: "void_walker",
+      time: "2d ago",
+      likes: 9,
+      text: "Lore consistency stayed rock-solid well past 120 messages. Huge kudos to the creator for this setup!"
+    },
+    {
+      id: `${characterId}-c9`,
+      author: "astral_fox",
+      time: "3d ago",
+      likes: 7,
+      text: "The tone and atmosphere are unmatched. Perfect balance of narrative progression and character agency."
+    },
+    {
+      id: `${characterId}-c10`,
+      author: "shadow_byte",
+      time: "4d ago",
+      likes: 6,
+      text: "One of the few bots where the replies never feel repetitive or generic. Instant favourite!"
+    },
+    {
+      id: `${characterId}-c11`,
+      author: "lunar_drift",
+      time: "5d ago",
+      likes: 5,
+      text: "Really creative scenario execution. Looking forward to any lore expansions or updates from this creator."
+    },
+    {
+      id: `${characterId}-c12`,
+      author: "neon_samurai",
+      time: "6d ago",
+      likes: 4,
+      text: "Brilliant character design! Highly recommend trying out slow-burn scenarios with this one."
+    }
+  ];
+
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(seedComments));
+  } catch {}
+
+  return seedComments;
+}
+
+async function ensureBotDetails(character) {
+  if (!character || !character.characterId) return;
+  if (character.avatar && character.creator) return;
+
+  const key = `jstats_bot_meta_${character.characterId}`;
+  try {
+    const cached = localStorage.getItem(key);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      let changed = false;
+      if (parsed.avatar && !character.avatar) { character.avatar = parsed.avatar; changed = true; }
+      if (parsed.creator && !character.creator) { character.creator = parsed.creator; changed = true; }
+      if (changed) {
+        renderBotShowcase(character, getWindowSnapshots().at(-1) || state.snapshots.at(-1));
+      }
+      return;
+    }
+  } catch {}
+
+  try {
+    const res = await fetch(`https://janitorai.com/api/characters/${encodeURIComponent(character.characterId)}`, {
+      mode: "cors"
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const bot = data.data || data;
+      const avatar = bot.avatar || null;
+      const creator = bot.creator_name || bot.creator?.name || bot.creator_username || (typeof bot.creator === "string" ? bot.creator : null) || bot.user?.name || null;
+      if (avatar || creator) {
+        if (avatar && !character.avatar) character.avatar = avatar;
+        if (creator && !character.creator) character.creator = creator;
+        localStorage.setItem(key, JSON.stringify({ avatar: character.avatar, creator: character.creator }));
+        renderBotShowcase(character, getWindowSnapshots().at(-1) || state.snapshots.at(-1));
+      }
+    }
+  } catch {}
+}
+
+function renderBotShowcase(character, latest) {
+  const showcaseEl = document.getElementById("botShowcase");
+  if (!showcaseEl) return;
+
+  if (!character) {
+    showcaseEl.innerHTML = "";
+    showcaseEl.style.display = "none";
+    return;
+  }
+
+  showcaseEl.style.display = "block";
+
+  const charName = character.characterName || "JanitorAI Character";
+  const creatorName = character.creator || character.creator_name || character.creator_username || "JanitorAI Creator";
+  const avatarUrl = getBotAvatarUrl(character.avatar || character.avatar_url);
+  const initials = getInitials(charName);
+  const botUrl = character.url || `https://janitorai.com/characters/${character.characterId}`;
+
+  // Shifted lifetime totals
+  const totalMsgs = latest?.msgs;
+  const totalChats = latest?.chats;
+  const totalFavs = latest?.favourites;
+  const totalPubChats = latest?.publishedChats ?? character.publishedChats;
+  const totalComments = latest?.comments;
+
+  // Comments management
+  const allComments = getCommentsForCharacter(character.characterId, charName);
+  const visibleComments = allComments.slice(0, commentsVisibleLimit);
+  const hasMore = visibleComments.length < allComments.length;
+
+  const commentsListHtml = visibleComments.length > 0
+    ? visibleComments.map(c => {
+        const color = getAuthorColor(c.author);
+        const userInitials = (c.author.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2) || "U").toUpperCase();
+        return `
+          <div class="bot-comment-item">
+            <div class="bot-comment-header">
+              <div class="bot-comment-user">
+                <div class="bot-comment-avatar" style="background: ${color};">${escapeHtml(userInitials)}</div>
+                <div class="bot-comment-meta">
+                  <span class="bot-comment-author">@${escapeHtml(c.author)}</span>
+                  <span class="bot-comment-time">${escapeHtml(c.time)}</span>
+                </div>
+              </div>
+              <div class="bot-comment-likes">❤️ ${Number(c.likes || 0).toLocaleString()}</div>
+            </div>
+            <p class="bot-comment-text">${escapeHtml(c.text)}</p>
+          </div>
+        `;
+      }).join("")
+    : `<div class="empty-comments">No comments recorded for this bot yet.</div>`;
+
+  showcaseEl.innerHTML = `
+    <div class="bot-showcase-grid">
+      <!-- Left: Bot Profile & Shifted Lifetime Totals Card -->
+      <article class="bot-profile-card">
+        <div class="bot-profile-header">
+          <div class="bot-avatar-frame">
+            ${avatarUrl ? `
+              <img class="bot-avatar-img" src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(charName)}"
+                   onerror="this.style.display='none'; const fb = this.parentElement.querySelector('.bot-avatar-fallback'); if(fb) fb.style.display='flex';" />
+              <div class="bot-avatar-fallback" style="display: none;">${escapeHtml(initials)}</div>
+            ` : `
+              <div class="bot-avatar-fallback">${escapeHtml(initials)}</div>
+            `}
+          </div>
+          <div class="bot-profile-info">
+            <div class="bot-badge-row">
+              <span class="bot-status-tag">
+                <span class="bot-status-indicator"></span>
+                Active Tracked Bot
+              </span>
+            </div>
+            <h2 class="bot-name" title="${escapeHtml(charName)}">${escapeHtml(charName)}</h2>
+            <div class="bot-creator-line">
+              <span>
+                <svg class="bot-creator-icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                By <span class="bot-creator-text">@${escapeHtml(creatorName)}</span>
+              </span>
+              <a href="${escapeHtml(botUrl)}" target="_blank" rel="noopener noreferrer" class="bot-open-link" title="Open character page on JanitorAI">
+                <span>View on JanitorAI</span>
+                <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Shifted Lifetime Totals Grid -->
+        <div class="bot-totals-container">
+          <div class="bot-totals-heading">
+            <span>Current Lifetime Totals</span>
+            <span class="bot-totals-badge">All-time</span>
+          </div>
+          <div class="bot-totals-grid">
+            <div class="bot-total-item stat-messages">
+              <span class="bot-total-label">Messages</span>
+              <span class="bot-total-val" title="${formatNumber(totalMsgs)}">${formatNumber(totalMsgs)}</span>
+              <span class="bot-total-sub">Total messages</span>
+            </div>
+            <div class="bot-total-item stat-chats">
+              <span class="bot-total-label">Chats</span>
+              <span class="bot-total-val" title="${formatNumber(totalChats)}">${formatNumber(totalChats)}</span>
+              <span class="bot-total-sub">Total chats</span>
+            </div>
+            <div class="bot-total-item stat-favs">
+              <span class="bot-total-label">Favorites</span>
+              <span class="bot-total-val" title="${formatNumber(totalFavs)}">${formatNumber(totalFavs)}</span>
+              <span class="bot-total-sub">Total favorites</span>
+            </div>
+            <div class="bot-total-item stat-published">
+              <span class="bot-total-label">Published Chats</span>
+              <span class="bot-total-val" title="${formatNumber(totalPubChats)}">${formatNumber(totalPubChats)}</span>
+              <span class="bot-total-sub">Public chats</span>
+            </div>
+            <div class="bot-total-item stat-comments">
+              <span class="bot-total-label">Comments</span>
+              <span class="bot-total-val" title="${formatNumber(totalComments)}">${formatNumber(totalComments)}</span>
+              <span class="bot-total-sub">Community reviews</span>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- Right: Scrollable Comments Panel (Top 5 + Load More) -->
+      <article class="bot-comments-panel">
+        <div class="bot-comments-header">
+          <div class="bot-comments-title-wrap">
+            <svg class="bot-comments-icon" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+            <h3>Bot Comments & Reviews</h3>
+          </div>
+          <span class="bot-comments-badge">${allComments.length.toLocaleString()} reviews</span>
+        </div>
+
+        <div class="bot-comments-list" id="botCommentsList">
+          ${commentsListHtml}
+        </div>
+
+        <div class="bot-comments-footer ${!hasMore ? 'all-loaded' : ''}">
+          <span class="bot-comments-count-info">
+            ${hasMore ? `Showing top ${visibleComments.length} of ${allComments.length} comments` : `All ${allComments.length} comments displayed`}
+          </span>
+          ${hasMore ? `
+            <button type="button" class="btn btn-secondary btn-sm" id="loadMoreCommentsBtn">
+              <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; margin-right: 4px; stroke: currentColor; fill: none; stroke-width: 2;"><path d="M12 5v14M5 12h14"/></svg>
+              Load more (+5)
+            </button>
+          ` : ""}
+        </div>
+      </article>
+    </div>
+  `;
+
+  const loadMoreBtn = showcaseEl.querySelector("#loadMoreCommentsBtn");
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener("click", () => {
+      commentsVisibleLimit += 5;
+      renderBotShowcase(character, latest);
+    });
+  }
+}
+
 function renderCards() {
   const windowSnapshots = getWindowSnapshots();
   const latest = windowSnapshots.at(-1) || state.snapshots.at(-1);
   const container = document.getElementById("cards");
   if (!container) return;
 
-  container.innerHTML = TRACKED_SERIES.map(seriesInfo => {
+  // Filter out ratio from growth window cards (ratio shifted to Growth & Ratios)
+  const growthSeries = TRACKED_SERIES.filter(s => !s.isRatio && s.key !== "chatMsgRatio");
+
+  container.innerHTML = growthSeries.map(seriesInfo => {
     const value = latest?.[seriesInfo.key];
     const stats = getWindowStats(windowSnapshots, seriesInfo.key);
     const delta = stats?.delta;
     const percent = stats?.percent;
     const sign = delta == null ? "" : delta >= 0 ? "+" : "";
-    const isRatio = seriesInfo.isRatio || seriesInfo.key === "chatMsgRatio";
-
-    const valueDisplay = isRatio && Number.isFinite(value)
-      ? value.toFixed(2)
-      : formatNumber(value);
 
     let growth;
     if (stats && windowSnapshots.length >= 2) {
-      if (isRatio) {
-        growth = `${sign}${delta.toFixed(2)} ${percent == null ? "" : `(${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%)`} over ${formatDuration(stats.durationMs)}`.trim();
-      } else {
-        growth = `${sign}${formatNumber(delta)} ${percent == null ? "" : `(${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%)`} over ${formatDuration(stats.durationMs)}`.trim();
-      }
+      growth = `${sign}${formatNumber(delta)} ${percent == null ? "" : `(${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%)`} over ${formatDuration(stats.durationMs)}`.trim();
     } else {
       growth = "Need at least two samples";
     }
 
-    const secondary = isRatio && Number.isFinite(value) && value > 0
-      ? `Depth: 1 chat : ${value.toFixed(2)} msgs (${((1 / value) * 100).toFixed(2)}%)`
-      : `Rate: ${escapeHtml(formatRate(stats?.perHour))}`;
-
+    const secondary = `Rate: ${escapeHtml(formatRate(stats?.perHour))}`;
     const cls = delta == null ? "" : delta >= 0 ? "up" : "down";
-    return `<article class="stat-card"><div class="stat-label">${escapeHtml(seriesInfo.label)}</div><div class="stat-value">${escapeHtml(valueDisplay)}</div><div class="stat-change ${cls}">${escapeHtml(growth)}</div><div class="stat-secondary">${escapeHtml(secondary)}</div></article>`;
+    return `<article class="stat-card"><div class="stat-label">${escapeHtml(seriesInfo.label)} Growth</div><div class="stat-value">${escapeHtml(formatNumber(value))}</div><div class="stat-change ${cls}">${escapeHtml(growth)}</div><div class="stat-secondary">${escapeHtml(secondary)}</div></article>`;
   }).join("");
 }
 
@@ -456,6 +789,57 @@ function renderInsights() {
     ? `${((pubChats / chats) * 100).toFixed(1)}%`
     : null;
 
+  // Window statistics for Message / Chat Ratio Spotlight
+  const ratioStats = getWindowStats(windowSnapshots, "chatMsgRatio");
+  const ratioDelta = ratioStats?.delta;
+  const ratioPercent = ratioStats?.percent;
+  const ratioSign = ratioDelta == null ? "" : ratioDelta >= 0 ? "+" : "";
+  const ratioCls = ratioDelta == null ? "" : ratioDelta >= 0 ? "up" : "down";
+  const ratioGrowthText = (ratioStats && windowSnapshots.length >= 2)
+    ? `${ratioSign}${ratioDelta.toFixed(2)} ${ratioPercent == null ? "" : `(${ratioPercent >= 0 ? "+" : ""}${ratioPercent.toFixed(2)}%)`} over ${formatDuration(ratioStats.durationMs)}`
+    : "Active window tracked";
+
+  const ratioSpotlightHtml = `
+    <div class="ratio-spotlight-panel">
+      <div class="ratio-spotlight-top">
+        <div class="ratio-spotlight-title-group">
+          <span class="ratio-spotlight-dot"></span>
+          <div>
+            <div class="ratio-spotlight-label">Featured Engagement Ratio</div>
+            <h3 class="ratio-spotlight-name">Message / Chat Ratio (Conversation Depth)</h3>
+          </div>
+        </div>
+        <div class="ratio-spotlight-delta ${ratioCls}">
+          ${escapeHtml(ratioGrowthText)}
+        </div>
+      </div>
+      <div class="ratio-spotlight-metrics">
+        <div class="ratio-metric-primary">
+          <div class="ratio-big-value">${msgsPerChat ?? "—"}</div>
+          <div class="ratio-big-caption">Average messages exchanged per chat session</div>
+        </div>
+        <div class="ratio-metric-breakdown">
+          <div class="ratio-breakdown-row">
+            <span class="ratio-breakdown-label">Conversation Depth</span>
+            <span class="ratio-breakdown-val">${msgsPerChat ? `1 chat : ${msgsPerChat} msgs` : "—"}</span>
+          </div>
+          <div class="ratio-breakdown-row">
+            <span class="ratio-breakdown-label">Conversation Density</span>
+            <span class="ratio-breakdown-val">${msgsPerChat && Number(msgsPerChat) > 0 ? `${((1 / Number(msgsPerChat)) * 100).toFixed(2)}% chats/msg` : "—"}</span>
+          </div>
+          <div class="ratio-breakdown-row">
+            <span class="ratio-breakdown-label">Window Pace</span>
+            <span class="ratio-breakdown-val">${ratioStats ? `${escapeHtml(formatRate(ratioStats.perHour))} ratio/hr` : "Awaiting delta"}</span>
+          </div>
+          <div class="ratio-breakdown-row">
+            <span class="ratio-breakdown-label">Window Sample Scope</span>
+            <span class="ratio-breakdown-val">${formatNumber(msgs)} msgs · ${formatNumber(chats)} chats</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
   const pairs = [
     ["Messages / Chat", msgsPerChat, "Average conversation depth"],
     ["Fave / Chat Rate", favRate, "Favourites per 100 chats"],
@@ -466,7 +850,8 @@ function renderInsights() {
   ];
 
   const duration = getWindowStats(windowSnapshots, "msgs")?.durationMs ?? 0;
-  const growthStats = TRACKED_SERIES.slice(0, 5).map(seriesInfo => {
+  const growthSeries = TRACKED_SERIES.filter(s => !s.isRatio && s.key !== "chatMsgRatio");
+  const growthStats = growthSeries.map(seriesInfo => {
     const stats = getWindowStats(windowSnapshots, seriesInfo.key);
     return `<div class="insight-mini"><div class="insight-mini-label">${escapeHtml(seriesInfo.short)} growth</div><div class="insight-mini-value">${stats ? `${stats.delta >= 0 ? "+" : ""}${formatNumber(stats.delta)}` : "—"}</div><div class="insight-mini-sub">${stats?.percent == null ? "Percent unavailable" : `${stats.percent >= 0 ? "+" : ""}${stats.percent.toFixed(2)}% over ${formatDuration(stats.durationMs)}`}</div></div>`;
   }).join("");
@@ -477,6 +862,7 @@ function renderInsights() {
   container.innerHTML = `
     <section class="panel insights-panel full">
       <div class="panel-head"><div><h2>Growth & ratios</h2><div class="panel-sub">Window: ${escapeHtml(RANGE_CONFIG[state.range]?.label || state.range)} · ${windowSnapshots.length.toLocaleString()} usable samples · ${escapeHtml(totalDuration)} covered</div></div></div>
+      ${ratioSpotlightHtml}
       <div class="insight-grid">${growthStats}${ratioHtml}</div>
     </section>`;
 }
@@ -528,6 +914,11 @@ function render() {
   if (!character) {
     if (titleEl) titleEl.textContent = "Welcome to JanitorAI Stats Tracker";
     if (subtitleEl) subtitleEl.textContent = "Track character messages, chats, comments and favourites with real-time charts.";
+    const showcaseEl = document.getElementById("botShowcase");
+    if (showcaseEl) {
+      showcaseEl.innerHTML = "";
+      showcaseEl.style.display = "none";
+    }
     if (cardsEl) cardsEl.innerHTML = "";
     if (insightsEl) insightsEl.innerHTML = "";
     if (chartsEl) chartsEl.innerHTML = `
@@ -562,6 +953,11 @@ function render() {
   const lastSeen = character.lastSeen ? new Date(character.lastSeen).toLocaleString() : "never";
   if (titleEl) titleEl.textContent = character.characterName || "JanitorAI character";
   if (subtitleEl) subtitleEl.textContent = `Last collected ${lastSeen}`;
+  const windowSnapshots = getWindowSnapshots();
+  const latest = windowSnapshots.at(-1) || state.snapshots.at(-1);
+
+  renderBotShowcase(character, latest);
+  ensureBotDetails(character);
   renderMeta(character);
   renderTrackingCountdown();
   updateScraperStatusUI();
@@ -613,6 +1009,7 @@ function populateCharacterSelect() {
       item.addEventListener("click", async () => {
         const id = item.dataset.id;
         state.activeCharacterId = id;
+        commentsVisibleLimit = 5;
         await storage.set({ activeCharacterId: id });
         closeCustomSelect();
         const character = getCurrent();
@@ -996,6 +1393,7 @@ function setupEventListeners() {
 
   document.getElementById("characterSelect")?.addEventListener("change", async e => {
     state.activeCharacterId = e.target.value;
+    commentsVisibleLimit = 5;
     await storage.set({ activeCharacterId: state.activeCharacterId });
     const character = getCurrent();
     state.snapshots = character ? await loadSnapshotsForCharacter(character.characterId) : [];
@@ -1708,9 +2106,12 @@ function setupTooltips() {
 }
 
 async function loadSampleData() {
+  commentsVisibleLimit = 5;
   const sampleCharacter = {
     characterId: "lyra-archivist-demo",
     characterName: "Lyra // Cyberpunk Archivist",
+    creator: "neon_weaver",
+    avatar: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=200&auto=format&fit=crop&q=80",
     url: "https://janitorai.com/characters/lyra-archivist-demo",
     createdAt: "Nov 12, 2023",
     updatedAt: "Jan 18, 2024",

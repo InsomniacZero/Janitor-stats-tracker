@@ -160,6 +160,7 @@
         commentsDisplay: Number.isFinite(comments) && comments >= 0 ? comments.toLocaleString() : null,
         characterName: obj.name || obj.character_name || null,
         avatar: obj.avatar || null,
+        creator: obj.creator_name || obj.creator?.name || obj.creator_username || (typeof obj.creator === "string" ? obj.creator : null) || obj.user?.name || null,
         createdAt: obj.created_at || obj.createdAt || null,
         updatedAt: obj.updated_at || obj.updatedAt || null,
         publishedAt: obj.published_at || obj.publishedAt || null,
