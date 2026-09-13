@@ -330,6 +330,7 @@ export async function processAndSaveScrapedCharacter(cleanId, raw, jobMetadata =
     msgsDisplay: msgs.toLocaleString(),
     chats,
     chatsDisplay: chats.toLocaleString(),
+    chatMsgRatio: chats > 0 ? Number((msgs / chats).toFixed(3)) : null,
     comments: Number.isFinite(comments) && comments >= 0 ? comments : 0,
     commentsDisplay: (Number.isFinite(comments) && comments >= 0 ? comments : 0).toLocaleString(),
     favourites: Number.isFinite(favourites) && favourites >= 0 ? favourites : 0,
@@ -598,12 +599,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const payload = message.payload;
       if (!payload?.characterId) throw new Error("Missing character ID.");
 
+      const chatsVal = Number(payload.chats);
+      const msgsVal = Number(payload.msgs);
       const snapshot = {
         timestamp: payload.timestamp || new Date().toISOString(),
         msgs: payload.msgs,
         msgsDisplay: payload.msgsDisplay ?? null,
         chats: payload.chats,
         chatsDisplay: payload.chatsDisplay ?? null,
+        chatMsgRatio: chatsVal > 0 ? Number((msgsVal / chatsVal).toFixed(3)) : null,
         comments: payload.comments,
         commentsDisplay: payload.commentsDisplay ?? null,
         favourites: payload.favourites,

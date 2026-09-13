@@ -14,6 +14,7 @@ import {
   sanitizeTransientZeroes,
   downsample,
   enrichPoints,
+  buildHourlyMarkers,
   makeTooltipMarkup,
   bindChartTooltips
 } from "./common.js";
@@ -101,6 +102,38 @@ function getWindowSnapshots() {
   return filterSnapshotsByRange(state.snapshots, state.range);
 }
 
+function normalizeSnapshots(snaps) {
+  return (snaps || []).map(s => {
+    const msgs = Number(s.msgs);
+    const chats = Number(s.chats);
+    let chatMsgRatio = s.chatMsgRatio != null ? Number(s.chatMsgRatio) : null;
+    if ((chatMsgRatio == null || !Number.isFinite(chatMsgRatio)) && Number.isFinite(msgs) && Number.isFinite(chats) && chats > 0) {
+      chatMsgRatio = Number((msgs / chats).toFixed(3));
+    }
+    return {
+      ...s,
+      chatMsgRatio
+    };
+  });
+}
+
+async function loadSnapshotsForCharacter(characterId) {
+  if (!characterId) return [];
+  let snaps = [];
+  const config = await getSupabaseConfig();
+  if (config) {
+    try {
+      snaps = await fetchCharacterSnapshots(characterId);
+    } catch (e) {
+      console.warn("Failed to fetch snapshots from Supabase, falling back to local DB", e);
+    }
+  }
+  if (!snaps || snaps.length === 0) {
+    snaps = await getSnapshots(characterId);
+  }
+  return normalizeSnapshots(snaps || []);
+}
+
 function pointTooltip(label, point, unit = "") {
   return makeTooltipMarkup({ label, point, suffix: unit });
 }
@@ -173,6 +206,17 @@ function makeSvgChart(title, color, sourcePoints, maxPoints = 800) {
 
   const gradientId = `grad_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
 
+  const { hourDots, edgeMarks, hourLines } = buildHourlyMarkers({
+    sampled,
+    valid,
+    pad,
+    width,
+    height,
+    x,
+    y,
+    color
+  });
+
   return `
     <svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${serializedPoints}" role="img" aria-label="${escapeHtml(title)} graph">
       <defs>
@@ -182,8 +226,11 @@ function makeSvgChart(title, color, sourcePoints, maxPoints = 800) {
         </linearGradient>
       </defs>
       ${grid}
+      ${hourLines}
       ${areaPath ? `<path class="chart-area" d="${areaPath}" fill="url(#${gradientId})" />` : ""}
       <path class="chart-line" d="${linePath}" stroke="${color}" />
+      ${hourDots}
+      ${edgeMarks}
       <line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" />
       <circle class="chart-active-dot" cx="0" cy="0" r="4.5" fill="${color}" stroke="#181715" stroke-width="2" style="display: none;" />
       <text class="axis-label" x="${pad.left}" y="${height - 12}">${escapeHtml(firstLabel)}</text>
@@ -298,10 +345,24 @@ function makeCombinedChart(snapshots) {
 
   const serializedPoints = escapeHtml(JSON.stringify(pointsData));
 
+  const primaryValid = series[0]?.points.filter(p => Number.isFinite(p.value)) || [];
+  const { edgeMarks, hourLines } = buildHourlyMarkers({
+    sampled,
+    valid: primaryValid.length ? primaryValid : sampled.filter(p => p.timestamp),
+    pad,
+    width,
+    height,
+    x,
+    y: null,
+    color: "#d97757"
+  });
+
   return `
     <svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${serializedPoints}" role="img" aria-label="Combined normalized trend graph">
       ${grid}
+      ${hourLines}
       ${linesSvg}
+      ${edgeMarks}
       <line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" />
       <circle class="chart-active-dot" cx="0" cy="0" r="4.5" fill="#d97757" stroke="#181715" stroke-width="2" style="display: none;" />
     </svg>
@@ -333,11 +394,29 @@ function renderCards() {
     const delta = stats?.delta;
     const percent = stats?.percent;
     const sign = delta == null ? "" : delta >= 0 ? "+" : "";
-    const growth = stats && windowSnapshots.length >= 2
-      ? `${sign}${formatNumber(delta)} ${percent == null ? "" : `(${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%)`} over ${formatDuration(stats.durationMs)}`.trim()
-      : "Need at least two samples";
+    const isRatio = seriesInfo.isRatio || seriesInfo.key === "chatMsgRatio";
+
+    const valueDisplay = isRatio && Number.isFinite(value)
+      ? `${value.toFixed(2)} msgs/chat`
+      : formatNumber(value);
+
+    let growth;
+    if (stats && windowSnapshots.length >= 2) {
+      if (isRatio) {
+        growth = `${sign}${delta.toFixed(2)} ${percent == null ? "" : `(${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%)`} over ${formatDuration(stats.durationMs)}`.trim();
+      } else {
+        growth = `${sign}${formatNumber(delta)} ${percent == null ? "" : `(${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%)`} over ${formatDuration(stats.durationMs)}`.trim();
+      }
+    } else {
+      growth = "Need at least two samples";
+    }
+
+    const secondary = isRatio && Number.isFinite(value) && value > 0
+      ? `Depth: 1 chat : ${value.toFixed(2)} msgs (${((1 / value) * 100).toFixed(2)}%)`
+      : `Rate: ${escapeHtml(formatRate(stats?.perHour))}`;
+
     const cls = delta == null ? "" : delta >= 0 ? "up" : "down";
-    return `<article class="stat-card"><div class="stat-label">${escapeHtml(seriesInfo.label)}</div><div class="stat-value">${formatNumber(value)}</div><div class="stat-change ${cls}">${escapeHtml(growth)}</div><div class="stat-secondary">Rate: ${escapeHtml(formatRate(stats?.perHour))}</div></article>`;
+    return `<article class="stat-card"><div class="stat-label">${escapeHtml(seriesInfo.label)}</div><div class="stat-value">${escapeHtml(valueDisplay)}</div><div class="stat-change ${cls}">${escapeHtml(growth)}</div><div class="stat-secondary">${escapeHtml(secondary)}</div></article>`;
   }).join("");
 }
 
@@ -418,7 +497,13 @@ function renderMeta(character) {
 function renderCharts() {
   const windowSnapshots = getWindowSnapshots();
   const charts = TRACKED_SERIES.map(seriesInfo => {
-    const source = windowSnapshots.map(p => ({ timestamp: p.timestamp, value: p[seriesInfo.key], display: p[`${seriesInfo.key}Display`] }));
+    const source = windowSnapshots.map(p => ({
+      timestamp: p.timestamp,
+      value: p[seriesInfo.key],
+      display: p[`${seriesInfo.key}Display`],
+      msgs: p.msgs,
+      chats: p.chats
+    }));
     return `<article class="panel"><div class="panel-head"><div><h2>${escapeHtml(seriesInfo.label)}</h2><div class="panel-sub">Actual value over time · hover any point for exact change</div></div></div><div class="chart-wrap">${makeSvgChart(seriesInfo.label, seriesInfo.color, enrichPoints(source, "value"))}</div></article>`;
   }).join("");
 
@@ -531,7 +616,7 @@ function populateCharacterSelect() {
         await storage.set({ activeCharacterId: id });
         closeCustomSelect();
         const character = getCurrent();
-        state.snapshots = character ? await getSnapshots(character.characterId) : [];
+        state.snapshots = character ? await loadSnapshotsForCharacter(character.characterId) : [];
         populateCharacterSelect();
         render();
       });
@@ -603,7 +688,8 @@ function setupRealtimeListener(characterId) {
     const exists = state.snapshots.some(s => s.timestamp === newSnapshot.timestamp);
     if (exists) return;
 
-    state.snapshots.push(newSnapshot);
+    const normalized = normalizeSnapshots([newSnapshot])[0];
+    state.snapshots.push(normalized);
     state.snapshots.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
     render();
@@ -869,15 +955,7 @@ async function load() {
 
   // 4. Fetch snapshots for active character
   if (character) {
-    let snaps = [];
-    const config = await getSupabaseConfig();
-    if (config) {
-      snaps = await fetchCharacterSnapshots(character.characterId);
-    }
-    if (!snaps || snaps.length === 0) {
-      snaps = await getSnapshots(character.characterId);
-    }
-    state.snapshots = snaps || [];
+    state.snapshots = await loadSnapshotsForCharacter(character.characterId);
   } else {
     state.snapshots = [];
   }
@@ -920,7 +998,7 @@ function setupEventListeners() {
     state.activeCharacterId = e.target.value;
     await storage.set({ activeCharacterId: state.activeCharacterId });
     const character = getCurrent();
-    state.snapshots = character ? await getSnapshots(character.characterId) : [];
+    state.snapshots = character ? await loadSnapshotsForCharacter(character.characterId) : [];
     populateCharacterSelect();
     render();
   });

@@ -10,6 +10,7 @@ import {
   ratio,
   sanitizeTransientZeroes,
   downsample,
+  buildHourlyMarkers,
   makeTooltipMarkup,
   bindChartTooltips
 } from "./common.js";
@@ -67,7 +68,18 @@ function makePopupChart(title, color, sourcePoints) {
     return { cx, cy, tooltipHtml };
   });
 
-  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${escapeHtml(JSON.stringify(pointsData))}" role="img" aria-label="${escapeHtml(title)} graph">${grid}<path class="chart-line" d="${path.trim()}" stroke="${color}"/><line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" /><circle class="chart-active-dot" cx="0" cy="0" r="4" fill="${color}" stroke="#181715" stroke-width="2" style="display: none;" /></svg><div class="chart-tooltip" role="status"></div>`;
+  const { hourDots, edgeMarks, hourLines } = buildHourlyMarkers({
+    sampled,
+    valid,
+    pad,
+    width,
+    height,
+    x,
+    y,
+    color
+  });
+
+  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${escapeHtml(JSON.stringify(pointsData))}" role="img" aria-label="${escapeHtml(title)} graph">${grid}${hourLines}<path class="chart-line" d="${path.trim()}" stroke="${color}"/>${hourDots}${edgeMarks}<line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" /><circle class="chart-active-dot" cx="0" cy="0" r="4" fill="${color}" stroke="#181715" stroke-width="2" style="display: none;" /></svg><div class="chart-tooltip" role="status"></div>`;
 }
 
 function makePopupCombined(snapshots) {
@@ -112,7 +124,20 @@ function makePopupCombined(snapshots) {
     const cy = primary && Number.isFinite(primary.value) ? y(primary.value) : pad.top + innerH / 2;
     return { cx, cy, tooltipHtml };
   });
-  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${escapeHtml(JSON.stringify(pointsData))}" role="img" aria-label="Combined trend graph">${svg}<line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" /><circle class="chart-active-dot" cx="0" cy="0" r="4" fill="#d97757" stroke="#181715" stroke-width="2" style="display: none;" /></svg><div class="chart-tooltip" role="status"></div><div class="legend">${TRACKED_SERIES.map(s=>`<span class="legend-item"><span class="legend-dot" style="background:${s.color}"></span>${escapeHtml(s.short)}</span>`).join("")}</div>`;
+
+  const primaryValid = series[0]?.points.filter(p => Number.isFinite(p.value)) || [];
+  const { edgeMarks, hourLines } = buildHourlyMarkers({
+    sampled,
+    valid: primaryValid.length ? primaryValid : sampled.filter(p => p.timestamp),
+    pad,
+    width,
+    height,
+    x,
+    y: null,
+    color: "#d97757"
+  });
+
+  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${escapeHtml(JSON.stringify(pointsData))}" role="img" aria-label="Combined trend graph">${svg}${hourLines}${edgeMarks}<line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" /><circle class="chart-active-dot" cx="0" cy="0" r="4" fill="#d97757" stroke="#181715" stroke-width="2" style="display: none;" /></svg><div class="chart-tooltip" role="status"></div><div class="legend">${TRACKED_SERIES.map(s=>`<span class="legend-item"><span class="legend-dot" style="background:${s.color}"></span>${escapeHtml(s.short)}</span>`).join("")}</div>`;
 }
 
 function renderRangeControls() {
@@ -148,9 +173,17 @@ function render() {
     const stats = getWindowStats(snapshots, s.key);
     const value = latest?.[s.key];
     const delta = stats?.delta;
-    const changeText = stats && snapshots.length >= 2 ? `${delta >= 0 ? "+" : ""}${formatNumber(delta)} over ${formatDuration(stats.durationMs)}` : "Need another sample";
+    const isRatio = s.isRatio || s.key === "chatMsgRatio";
+    const valueDisplay = isRatio && Number.isFinite(value)
+      ? `${value.toFixed(2)} msgs/chat`
+      : formatCompact(value);
+    const changeText = stats && snapshots.length >= 2
+      ? (isRatio
+          ? `${delta >= 0 ? "+" : ""}${delta.toFixed(2)} over ${formatDuration(stats.durationMs)}`
+          : `${delta >= 0 ? "+" : ""}${formatNumber(delta)} over ${formatDuration(stats.durationMs)}`)
+      : "Need another sample";
     const pct = stats?.percent == null ? "" : ` · ${stats.percent >= 0 ? "+" : ""}${stats.percent.toFixed(2)}%`;
-    return `<article class="stat-card"><div class="stat-label">${escapeHtml(s.label)}</div><div class="stat-value">${formatCompact(value)}</div><div class="stat-change ${delta == null ? "" : delta >= 0 ? "up" : "down"}">${escapeHtml(changeText + pct)}</div></article>`;
+    return `<article class="stat-card"><div class="stat-label">${escapeHtml(s.label)}</div><div class="stat-value">${escapeHtml(valueDisplay)}</div><div class="stat-change ${delta == null ? "" : delta >= 0 ? "up" : "down"}">${escapeHtml(changeText + pct)}</div></article>`;
   }).join("");
 
   const latestMsg = latest?.msgs, latestChats = latest?.chats, latestComments = latest?.comments, latestFavs = latest?.favourites;
@@ -162,7 +195,7 @@ function render() {
   ];
   document.getElementById("insights").innerHTML = `<section class="panel insights-panel full"><div class="panel-head"><div><h2>Ratios</h2><div class="panel-sub">Derived from the latest recorded values</div></div></div><div class="insight-grid">${insights.map(([label,value,sub])=>`<div class="insight-mini"><div class="insight-mini-label">${label}</div><div class="insight-mini-value">${value == null ? "—" : formatCompact(value)}</div><div class="insight-mini-sub">${sub}</div></div>`).join("")}</div></section>`;
 
-  document.getElementById("charts").innerHTML = TRACKED_SERIES.map(s => `<article class="panel"><div class="panel-head"><div><h2>${escapeHtml(s.label)}</h2><div class="panel-sub">Actual value · hover for exact delta</div></div></div><div class="chart-wrap">${makePopupChart(s.label, s.color, snapshots.map(p=>({timestamp:p.timestamp,value:p[s.key]})))}</div></article>`).join("") + `<article class="panel full"><div class="panel-head"><div><h2>Combined trend</h2><div class="panel-sub">Indexed to 100 at the start of the selected window</div></div></div><div class="chart-wrap">${makePopupCombined(snapshots)}</div></article>`;
+  document.getElementById("charts").innerHTML = TRACKED_SERIES.map(s => `<article class="panel"><div class="panel-head"><div><h2>${escapeHtml(s.label)}</h2><div class="panel-sub">Actual value · hover for exact delta</div></div></div><div class="chart-wrap">${makePopupChart(s.label, s.color, snapshots.map(p=>({timestamp:p.timestamp,value:p[s.key],msgs:p.msgs,chats:p.chats})))}</div></article>`).join("") + `<article class="panel full"><div class="panel-head"><div><h2>Combined trend</h2><div class="panel-sub">Indexed to 100 at the start of the selected window</div></div></div><div class="chart-wrap">${makePopupCombined(snapshots)}</div></article>`;
   bindChartTooltips(document.getElementById("charts"));
 }
 

@@ -1,6 +1,7 @@
 const STAT_CONFIG = {
   chats: { label: "Chats", short: "Chats", color: "#81B29A" },
   msgs: { label: "Messages", short: "Msgs", color: "#d97757" },
+  chatMsgRatio: { label: "Chat / Message Ratio", short: "Msgs/Chat", color: "#c4a7e7", isRatio: true, unit: " msgs/chat" },
   comments: { label: "Comments", short: "Comments", color: "#e0a458" },
   favourites: { label: "Favourites", short: "Faves", color: "#d97373" },
   publishedChats: { label: "Published chats", short: "Pub. chats", color: "#6a9bcc" }
@@ -76,7 +77,18 @@ function filterSnapshotsByRange(snapshots, rangeId) {
 }
 
 function getWindowStats(snapshots, key) {
-  const valid = snapshots.filter(s => Number.isFinite(s[key]));
+  const valid = snapshots.map(s => {
+    let val = s[key];
+    if ((val == null || !Number.isFinite(val)) && key === "chatMsgRatio") {
+      const c = Number(s.chats);
+      const m = Number(s.msgs);
+      if (Number.isFinite(c) && c > 0 && Number.isFinite(m) && m >= 0) {
+        val = Number((m / c).toFixed(3));
+      }
+    }
+    return { ...s, [key]: val };
+  }).filter(s => Number.isFinite(s[key]));
+
   if (!valid.length) return null;
   const first = valid[0];
   const last = valid.at(-1);
@@ -126,8 +138,24 @@ function downsample(points, maxPoints = 800) {
 function enrichPoints(snapshots, key) {
   return snapshots.map((snapshot, index) => {
     const previous = index > 0 ? snapshots[index - 1] : null;
-    const value = Number.isFinite(snapshot[key]) ? snapshot[key] : NaN;
-    const previousValue = previous && Number.isFinite(previous[key]) ? previous[key] : null;
+    let value = Number.isFinite(snapshot[key]) ? snapshot[key] : NaN;
+    if (!Number.isFinite(value) && key === "chatMsgRatio") {
+      const c = Number(snapshot.chats);
+      const m = Number(snapshot.msgs);
+      if (Number.isFinite(c) && c > 0 && Number.isFinite(m) && m >= 0) {
+        value = Number((m / c).toFixed(3));
+      }
+    }
+
+    let previousValue = previous && Number.isFinite(previous[key]) ? previous[key] : null;
+    if ((previousValue == null || !Number.isFinite(previousValue)) && previous && key === "chatMsgRatio") {
+      const pc = Number(previous.chats);
+      const pm = Number(previous.msgs);
+      if (Number.isFinite(pc) && pc > 0 && Number.isFinite(pm) && pm >= 0) {
+        previousValue = Number((pm / pc).toFixed(3));
+      }
+    }
+
     const delta = previousValue == null || !Number.isFinite(value) ? null : value - previousValue;
     const percent = previousValue == null || previousValue === 0 || !Number.isFinite(value)
       ? null
@@ -145,6 +173,98 @@ function enrichPoints(snapshots, key) {
   });
 }
 
+/**
+ * Builds SVG elements for hourly marks:
+ * 1. Dots on the line itself at hourly boundaries
+ * 2. "+" tick marks on graph top and bottom axes
+ * 3. Subtle vertical hourly guidelines
+ * 4. Hourly time labels along the bottom edge
+ */
+function buildHourlyMarkers({ sampled, valid, pad, width, height, x, y, color }) {
+  if (!valid || valid.length < 2) return { hourDots: "", edgeMarks: "", hourLines: "" };
+
+  const tStart = new Date(valid[0].timestamp).getTime();
+  const tEnd = new Date(valid.at(-1).timestamp).getTime();
+  const durationMs = tEnd - tStart;
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return { hourDots: "", edgeMarks: "", hourLines: "" };
+  }
+
+  // Determine appropriate hourly step based on window duration
+  let stepMs = 3600 * 1000; // 1 hour default
+  if (durationMs <= 2.5 * 3600 * 1000) {
+    stepMs = 30 * 60 * 1000; // 30 minutes for tight windows (<2.5h)
+  } else if (durationMs > 14 * 3600 * 1000 && durationMs <= 36 * 3600 * 1000) {
+    stepMs = 2 * 3600 * 1000; // 2 hours for 24h window
+  } else if (durationMs > 36 * 3600 * 1000 && durationMs <= 5 * 24 * 3600 * 1000) {
+    stepMs = 6 * 3600 * 1000; // 6 hours
+  } else if (durationMs > 5 * 24 * 3600 * 1000 && durationMs <= 14 * 24 * 3600 * 1000) {
+    stepMs = 12 * 3600 * 1000; // 12 hours for 7d window
+  } else if (durationMs > 14 * 24 * 3600 * 1000) {
+    stepMs = 24 * 3600 * 1000; // 24 hours for 30d window
+  }
+
+  const firstBoundary = Math.ceil(tStart / stepMs) * stepMs;
+  let hourDots = "";
+  let edgeMarks = "";
+  let hourLines = "";
+
+  const bottomY = height - pad.bottom;
+  const topY = pad.top;
+
+  for (let t = firstBoundary; t <= tEnd; t += stepMs) {
+    // Find closest data point to boundary
+    let closest = sampled[0];
+    let minDiff = Math.abs(new Date(sampled[0].timestamp).getTime() - t);
+    for (let i = 1; i < sampled.length; i++) {
+      const diff = Math.abs(new Date(sampled[i].timestamp).getTime() - t);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closest = sampled[i];
+      }
+    }
+
+    if (minDiff > stepMs * 0.75) continue;
+
+    const sampleIdx = sampled.indexOf(closest);
+    const cx = x(sampleIdx);
+    const cy = Number.isFinite(closest.value) && y ? y(closest.value) : null;
+
+    // 1. Hourly dot on the line itself
+    if (cy != null && Number.isFinite(cy)) {
+      hourDots += `<circle class="chart-hour-dot" cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="3.5" fill="${color || "#d97757"}" stroke="#181715" stroke-width="2" />`;
+    }
+
+    // 2. Subtle vertical guideline across the chart
+    hourLines += `<line class="chart-hour-guideline" x1="${cx.toFixed(2)}" y1="${topY}" x2="${cx.toFixed(2)}" y2="${bottomY}" />`;
+
+    // 3. "+" Edge mark on bottom axis
+    edgeMarks += `
+      <g class="chart-hour-edge-plus" transform="translate(${cx.toFixed(2)}, ${bottomY})">
+        <line x1="-3.5" y1="0" x2="3.5" y2="0" class="chart-edge-plus-line" />
+        <line x1="0" y1="-3.5" x2="0" y2="3.5" class="chart-edge-plus-line" />
+      </g>
+    `;
+
+    // 4. "+" Edge mark on top axis
+    edgeMarks += `
+      <g class="chart-hour-edge-plus" transform="translate(${cx.toFixed(2)}, ${topY})">
+        <line x1="-3" y1="0" x2="3" y2="0" class="chart-edge-plus-line" />
+        <line x1="0" y1="-3" x2="0" y2="3" class="chart-edge-plus-line" />
+      </g>
+    `;
+
+    // 5. Hourly label below bottom axis (skip if too close to outer date labels)
+    if (cx >= pad.left + 28 && cx <= width - pad.right - 28) {
+      const d = new Date(t);
+      const labelStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+      edgeMarks += `<text class="axis-label chart-hour-label" x="${cx.toFixed(2)}" y="${bottomY + 16}" text-anchor="middle">${escapeHtml(labelStr)}</text>`;
+    }
+  }
+
+  return { hourDots, edgeMarks, hourLines };
+}
+
 function makeTooltipMarkup({ label, point, suffix = "", color = "#d97757" }) {
   const dateStr = new Date(point.timestamp).toLocaleString([], {
     month: "short",
@@ -154,9 +274,24 @@ function makeTooltipMarkup({ label, point, suffix = "", color = "#d97757" }) {
     minute: "2-digit"
   });
 
-  const deltaHtml = point.delta != null
+  const isRatio = label.toLowerCase().includes("ratio");
+  const valueDisplay = isRatio && Number.isFinite(point.value)
+    ? `${point.value.toFixed(2)}${suffix || " msgs/chat"}`
+    : `${formatNumber(point.value)}${suffix}`;
+
+  const deltaDisplay = point.delta != null
+    ? (isRatio
+        ? `${point.delta >= 0 ? "+" : ""}${point.delta.toFixed(2)}${point.percent != null ? ` (${point.percent >= 0 ? "+" : ""}${point.percent.toFixed(2)}%)` : ""}`
+        : `${point.delta >= 0 ? "+" : ""}${formatNumber(point.delta)}${point.percent != null ? ` (${point.percent >= 0 ? "+" : ""}${point.percent.toFixed(2)}%)` : ""}`)
+    : null;
+
+  const ratioExtra = isRatio && Number.isFinite(point.value) && point.value > 0
+    ? `<div class="chart-tt-subratio">1 chat per ${point.value.toFixed(2)} msgs · ${((1 / point.value) * 100).toFixed(2)}% chats/msg</div>`
+    : "";
+
+  const deltaHtml = deltaDisplay != null
     ? `<div class="chart-tt-delta ${point.delta >= 0 ? "up" : "down"}">
-         <span>${point.delta >= 0 ? "+" : ""}${formatNumber(point.delta)}${point.percent != null ? ` (${point.percent >= 0 ? "+" : ""}${point.percent.toFixed(2)}%)` : ""}</span>
+         <span>${escapeHtml(deltaDisplay)}</span>
          ${point.elapsedMs != null ? `<span class="chart-tt-elapsed">in ${formatDuration(point.elapsedMs)}</span>` : ""}
        </div>`
     : "";
@@ -166,7 +301,8 @@ function makeTooltipMarkup({ label, point, suffix = "", color = "#d97757" }) {
       <span class="chart-tt-indicator" style="background: ${color};"></span>
       <span class="chart-tt-label">${escapeHtml(label)}</span>
     </div>
-    <div class="chart-tt-value">${escapeHtml(formatNumber(point.value))}${escapeHtml(suffix)}</div>
+    <div class="chart-tt-value">${escapeHtml(valueDisplay)}</div>
+    ${ratioExtra}
     <div class="chart-tt-time">${escapeHtml(dateStr)}</div>
     ${deltaHtml}
   `;
@@ -198,14 +334,16 @@ function bindChartTooltips(root = document) {
     };
 
     wrap.addEventListener("pointermove", (e) => {
-      const rect = svg.getBoundingClientRect();
+      const svgRect = svg.getBoundingClientRect();
+      const wrapRect = wrap.getBoundingClientRect();
       const vb = svg.viewBox.baseVal;
-      const mouseX = e.clientX - rect.left;
-      if (mouseX < 0 || mouseX > rect.width) {
+
+      const mouseSvgX = e.clientX - svgRect.left;
+      if (mouseSvgX < 0 || mouseSvgX > svgRect.width) {
         hide();
         return;
       }
-      const svgX = (mouseX / rect.width) * vb.width;
+      const svgX = (mouseSvgX / svgRect.width) * vb.width;
 
       // Find nearest point by X coordinate
       let nearest = pointsData[0];
@@ -236,20 +374,26 @@ function bindChartTooltips(root = document) {
       tooltip.innerHTML = nearest.tooltipHtml;
       tooltip.classList.add("visible");
 
-      const tooltipRect = tooltip.getBoundingClientRect();
-      const screenX = (nearest.cx / vb.width) * rect.width;
-      const screenY = (nearest.cy / vb.height) * rect.height;
+      // Position tooltip right next to the cursor itself
+      const cursorX = e.clientX - wrapRect.left;
+      const cursorY = e.clientY - wrapRect.top;
 
-      let left = screenX + 16;
-      let top = screenY - tooltipRect.height / 2;
+      const tooltipWidth = tooltip.offsetWidth || 180;
+      const tooltipHeight = tooltip.offsetHeight || 80;
 
-      if (left + tooltipRect.width > wrap.clientWidth - 10) {
-        left = screenX - tooltipRect.width - 16;
+      let left = cursorX + 16;
+      let top = cursorY - tooltipHeight / 2;
+
+      // Flip to left side if cursor is close to right edge of container
+      if (left + tooltipWidth > wrap.clientWidth - 10) {
+        left = cursorX - tooltipWidth - 16;
       }
-      if (left < 6) left = 6;
-      if (top < 6) top = 6;
-      if (top + tooltipRect.height > wrap.clientHeight - 6) {
-        top = wrap.clientHeight - tooltipRect.height - 6;
+
+      // Keep within bounds of wrap container
+      if (left < 8) left = 8;
+      if (top < 8) top = 8;
+      if (top + tooltipHeight > wrap.clientHeight - 8) {
+        top = wrap.clientHeight - tooltipHeight - 8;
       }
 
       tooltip.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
@@ -275,6 +419,7 @@ export {
   sanitizeTransientZeroes,
   downsample,
   enrichPoints,
+  buildHourlyMarkers,
   makeTooltipMarkup,
   bindChartTooltips
 };
@@ -296,6 +441,7 @@ if (typeof globalThis !== "undefined") {
     sanitizeTransientZeroes,
     downsample,
     enrichPoints,
+    buildHourlyMarkers,
     makeTooltipMarkup,
     bindChartTooltips
   });

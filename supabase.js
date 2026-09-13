@@ -245,15 +245,20 @@ export async function fetchCharacterSnapshots(characterId) {
 
     if (!res.ok) return [];
     const rows = await res.json();
-    return rows.map(r => ({
-      timestamp: r.timestamp,
-      characterId: r.character_id,
-      chats: Number(r.chats),
-      msgs: Number(r.msgs),
-      comments: Number(r.comments),
-      favourites: Number(r.favourites),
-      publishedChats: Number(r.published_chats)
-    }));
+    return rows.map(r => {
+      const chats = Number(r.chats);
+      const msgs = Number(r.msgs);
+      return {
+        timestamp: r.timestamp,
+        characterId: r.character_id,
+        chats,
+        msgs,
+        chatMsgRatio: chats > 0 ? Number((msgs / chats).toFixed(3)) : null,
+        comments: Number(r.comments),
+        favourites: Number(r.favourites),
+        publishedChats: Number(r.published_chats)
+      };
+    });
   } catch (err) {
     console.warn("JStats: failed to fetch snapshots from Supabase", err);
     return [];
@@ -297,11 +302,14 @@ export function subscribeToRealtimeSnapshots(characterId, onSnapshot) {
           if (msg.event === "INSERT" && msg.payload?.record) {
             const record = msg.payload.record;
             if (!characterId || record.character_id === characterId) {
+              const chats = Number(record.chats);
+              const msgs = Number(record.msgs);
               onSnapshot({
                 timestamp: record.timestamp,
                 characterId: record.character_id,
-                chats: Number(record.chats),
-                msgs: Number(record.msgs),
+                chats,
+                msgs,
+                chatMsgRatio: chats > 0 ? Number((msgs / chats).toFixed(3)) : null,
                 comments: Number(record.comments),
                 favourites: Number(record.favourites),
                 publishedChats: Number(record.published_chats)

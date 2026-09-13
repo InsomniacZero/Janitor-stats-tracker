@@ -66,7 +66,14 @@ async function getSnapshots(characterId) {
       [characterId, "\uffff"]
     );
     const rows = await idbRequest(index.getAll(range));
-    return rows.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    return rows.sort((a, b) => a.timestamp.localeCompare(b.timestamp)).map(r => {
+      const chats = Number(r.chats);
+      const msgs = Number(r.msgs);
+      return {
+        ...r,
+        chatMsgRatio: r.chatMsgRatio != null ? Number(r.chatMsgRatio) : (chats > 0 ? Number((msgs / chats).toFixed(3)) : null)
+      };
+    });
   } finally {
     db.close();
   }
