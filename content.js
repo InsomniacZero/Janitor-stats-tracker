@@ -38,6 +38,22 @@ window.addEventListener("message", (e) => {
       resolve(characters);
     }
   }
+
+  if ((e.data.type === "REVIEWS_CAPTURED" || e.data.type === "REVIEWS_RESPONSE") && Array.isArray(e.data.reviews)) {
+    const charId = cleanUuid(e.data.characterId) || getCharacterId();
+    if (charId && e.data.reviews.length > 0) {
+      chrome.storage.local.set({ [`jstats_reviews_${charId}`]: e.data.reviews }).catch(() => {});
+      chrome.runtime.sendMessage({
+        type: "REVIEWS_SYNCED",
+        payload: { characterId: charId, reviews: e.data.reviews }
+      }).catch(() => {});
+    }
+    if (e.data.requestId && pendingMainWorldRequests.has(e.data.requestId)) {
+      const resolve = pendingMainWorldRequests.get(e.data.requestId);
+      pendingMainWorldRequests.delete(e.data.requestId);
+      resolve(e.data.reviews);
+    }
+  }
 });
 
 /**
@@ -746,12 +762,118 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { ok: false, reason: "NOT_FOUND_IN_FEED" };
     })()
       .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  if (message?.type === "GET_CHARACTER_PAGE_DETAILS") {
+    const targetId = cleanUuid(message.characterId);
+    (async () => {
+      let avatar = null;
+      let creator = null;
+      let reviews = [];
+
+      if (getCharacterId() === targetId) {
+        const stats = await extractStats();
+        avatar = stats.avatar;
+        creator = stats.creator;
+        reviews = extractRealReviewsFromDom();
+      }
+
+      if (!avatar || !creator) {
+        const cached = mainWorldStatsCache.get(targetId);
+        if (cached) {
+          if (cached.avatar && !avatar) avatar = cached.avatar;
+          if (cached.creator && !creator) creator = cached.creator;
+        }
+      }
+
+      if (reviews.length === 0 && targetId) {
+        try {
+          const stored = await chrome.storage.local.get(`jstats_reviews_${targetId}`);
+          if (Array.isArray(stored[`jstats_reviews_${targetId}`])) {
+            reviews = stored[`jstats_reviews_${targetId}`];
+          }
+        } catch {}
+      }
+
+      if (reviews.length === 0 && targetId) {
+        try {
+          const fetched = await requestReviewsFromMainWorld(targetId);
+          if (Array.isArray(fetched) && fetched.length > 0) {
+            reviews = fetched;
+          }
+        } catch {}
+      }
+
+      return { ok: true, characterId: targetId, avatar, creator, reviews };
+    })()
+      .then(sendResponse)
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
 
   return false;
 });
+
+function requestReviewsFromMainWorld(characterId) {
+  return new Promise((resolve) => {
+    const requestId = "req_rev_" + Math.random().toString(36).slice(2);
+    const timer = setTimeout(() => {
+      pendingMainWorldRequests.delete(requestId);
+      resolve([]);
+    }, 4000);
+
+    pendingMainWorldRequests.set(requestId, (reviews) => {
+      clearTimeout(timer);
+      resolve(reviews || []);
+    });
+
+    window.postMessage(
+      {
+        source: "JSTATS_CONTENT",
+        type: "REQUEST_REVIEWS",
+        requestId,
+        characterId
+      },
+      "*"
+    );
+  });
+}
+
+function extractRealReviewsFromDom() {
+  const reviews = [];
+  try {
+    const reviewCards = document.querySelectorAll(
+      '[data-testid*="review"], [class*="review-item"], [class*="review_item"], .chakra-card, div[class*="css-"][role="article"]'
+    );
+    for (const card of reviewCards) {
+      const authorEl = card.querySelector('a[href*="/profiles/"], a[href^="/@"], [class*="author"]');
+      const textEl = card.querySelector('p, [class*="text"], [class*="comment"], [class*="content"], .chakra-text');
+      if (!authorEl || !textEl) continue;
+
+      const author = authorEl.textContent?.trim().replace(/^@/, "");
+      const text = textEl.textContent?.trim();
+      if (!author || !text || text.length < 2) continue;
+
+      const likesMatch = card.textContent?.match(/❤️\s*(\d+)|(\d+)\s*(?:likes|helpful)/i);
+      const likes = likesMatch ? Number(likesMatch[1] || likesMatch[2]) : 0;
+
+      const timeEl = card.querySelector('time, [class*="time"], [class*="date"]');
+      const time = timeEl?.textContent?.trim() || "";
+
+      reviews.push({
+        id: `rev_${author}_${text.slice(0, 10)}`.replace(/[^a-zA-Z0-9_]/g, ""),
+        author,
+        time,
+        likes,
+        text
+      });
+      if (reviews.length >= 20) break;
+    }
+  } catch {}
+  return reviews;
+}
 
 // JanitorAI is a SPA. Catch character-to-character or feed-to-character navigation without full reload.
 setInterval(() => {

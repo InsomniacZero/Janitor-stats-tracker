@@ -236,6 +236,53 @@
     </div>
   </div>
 
+  <!-- Edit Bot Details Modal (Avatar & Creator) -->
+  <div class="modal-overlay" id="editBotModalOverlay" role="dialog" aria-modal="true" aria-labelledby="editBotModalTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <h3 id="editBotModalTitle">Edit Bot Profile</h3>
+          <p class="modal-subtitle">Set avatar image URL and creator handle for this bot.</p>
+        </div>
+        <button class="modal-close" id="closeEditBotModalBtn" aria-label="Close">&times;</button>
+      </div>
+
+      <form id="editBotForm" class="modal-form">
+        <div class="form-group">
+          <label for="editBotAvatarInput">Bot Avatar Image URL</label>
+          <input 
+            type="url" 
+            id="editBotAvatarInput" 
+            placeholder="https://ella.janitorai.com/bot-avatars/... or direct image link"
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <div class="input-helper">Supports JanitorAI CDN (ella.janitorai.com) or any image URL (WebP, PNG, JPG).</div>
+        </div>
+
+        <div class="form-group">
+          <label for="editBotCreatorInput">Creator Handle / Name</label>
+          <div class="input-prefix-wrap">
+            <span class="input-prefix">@</span>
+            <input 
+              type="text" 
+              id="editBotCreatorInput" 
+              placeholder="Creator username (e.g. InsomniacZer0)"
+              autocomplete="off"
+              spellcheck="false"
+            >
+          </div>
+          <div class="input-helper">The JanitorAI creator name to display on the showcase card.</div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="cancelEditBotModalBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="saveEditBotBtn">Save Details</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Track Bot URL Modal (Autonomous 3-Day Scraper) -->
   <div class="modal-overlay" id="trackModalOverlay" role="dialog" aria-modal="true" aria-labelledby="trackModalTitle">
     <div class="modal-card">

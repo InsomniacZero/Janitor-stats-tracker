@@ -31,8 +31,47 @@
           payload: res
         }, "*");
       });
+    } else if (msg.type === "GET_BOT_DETAILS") {
+      chrome.runtime.sendMessage({
+        type: "GET_BOT_DETAILS",
+        payload: msg.payload
+      }, (res) => {
+        if (res?.ok) {
+          window.postMessage({
+            source: "JSTATS_EXTENSION",
+            type: "BOT_DETAILS_RESOLVED",
+            payload: res
+          }, "*");
+        }
+      });
+    } else if (msg.type === "UPDATE_BOT_META") {
+      chrome.runtime.sendMessage({
+        type: "UPDATE_BOT_META",
+        payload: msg.payload
+      }, (res) => {
+        if (res) {
+          window.postMessage({
+            source: "JSTATS_EXTENSION",
+            type: "BOT_META_UPDATED",
+            payload: res
+          }, "*");
+        }
+      });
     }
   });
+
+  // Listen for messages pushed from background (e.g. real reviews scraped on JanitorAI)
+  try {
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type === "REVIEWS_SYNCED" || message?.type === "BOT_DETAILS_RESOLVED") {
+        window.postMessage({
+          source: "JSTATS_EXTENSION",
+          type: message.type,
+          payload: message.payload
+        }, "*");
+      }
+    });
+  } catch {}
 
   announceExtension();
   setInterval(announceExtension, 4000);

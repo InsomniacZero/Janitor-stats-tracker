@@ -42,6 +42,7 @@ import {
   insertSnapshot,
   fetchCharacterSnapshots,
   subscribeToRealtimeSnapshots,
+  updateTrackedJobMetadata,
   SCHEMA_SQL
 } from "./supabase.js";
 
@@ -387,10 +388,15 @@ let commentsVisibleLimit = 5;
 function getBotAvatarUrl(avatar) {
   if (!avatar || typeof avatar !== "string") return null;
   const trimmed = avatar.trim();
+  if (!trimmed) return null;
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("data:")) {
     return trimmed;
   }
-  return `https://f4.janitorai.com/bot-avatars/${encodeURIComponent(trimmed)}`;
+  const cleanKey = trimmed.replace(/^\/+/, "");
+  if (cleanKey.startsWith("bot-avatars/") || cleanKey.startsWith("media-approved/")) {
+    return `https://ella.janitorai.com/${cleanKey}`;
+  }
+  return `https://ella.janitorai.com/bot-avatars/${encodeURIComponent(cleanKey)}`;
 }
 
 function getInitials(name) {
@@ -414,120 +420,41 @@ function getAuthorColor(username) {
   return colors[Math.abs(hash) % colors.length];
 }
 
-function getCommentsForCharacter(characterId, charName) {
+/**
+ * Returns strictly real comments stored for this character.
+ * Zero generated, fake, or mock comments are allowed.
+ */
+function getCommentsForCharacter(characterId) {
   if (!characterId) return [];
   const storageKey = `jstats_comments_${characterId}`;
   try {
     const stored = localStorage.getItem(storageKey);
     if (stored) {
       const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
+        // Purge any legacy fake comments (seeded with id ending in -c1, -c2, etc. or containing old hardcoded texts)
+        const isFake = parsed.some(c => 
+          c.id?.startsWith(`${characterId}-c`) || 
+          c.author === "cipher_runner" || 
+          c.author === "starlight_09" ||
+          c.text?.includes("token optimization") ||
+          c.text?.includes("Lore consistency")
+        );
+        if (isFake) {
+          localStorage.removeItem(storageKey);
+          return [];
+        }
         return parsed;
       }
     }
   } catch (e) {
     console.debug("JStats: error reading cached comments", e);
   }
-
-  // Realistic fallback seed comments tailored to character
-  const cleanName = charName || "this character";
-  const seedComments = [
-    {
-      id: `${characterId}-c1`,
-      author: "cipher_runner",
-      time: "18m ago",
-      likes: 42,
-      text: `The dialogue flow on ${cleanName} is genuinely exceptional! Reached 80+ messages without breaking persona once. Hands down one of my favorites.`
-    },
-    {
-      id: `${characterId}-c2`,
-      author: "starlight_09",
-      time: "1h ago",
-      likes: 29,
-      text: "The initial prompt formatting and worldbuilding here are immaculate. Every response feels layered and engaging."
-    },
-    {
-      id: `${characterId}-c3`,
-      author: "echo_vale",
-      time: "3h ago",
-      likes: 21,
-      text: `Genuinely surprised by how well ${cleanName} adapts to alternate story paths. The prose quality is leagues ahead of average bots.`
-    },
-    {
-      id: `${characterId}-c4`,
-      author: "velvet_rain",
-      time: "6h ago",
-      likes: 18,
-      text: "Such a great bot! The emotional pacing and descriptive details make long conversation sessions so immersive."
-    },
-    {
-      id: `${characterId}-c5`,
-      author: "krono_88",
-      time: "12h ago",
-      likes: 15,
-      text: "The message-to-chat depth speaks for itself. Definitely deserving of all the favourites and public chat shares."
-    },
-    {
-      id: `${characterId}-c6`,
-      author: "glitch_cat",
-      time: "1d ago",
-      likes: 13,
-      text: "Loved the intro greeting and how responsive it is to subtle scenario twists. 10/10 character build."
-    },
-    {
-      id: `${characterId}-c7`,
-      author: "ember_glow",
-      time: "1d ago",
-      likes: 11,
-      text: `Had an unforgettable roleplay session with ${cleanName}. The creator clearly put massive effort into token optimization.`
-    },
-    {
-      id: `${characterId}-c8`,
-      author: "void_walker",
-      time: "2d ago",
-      likes: 9,
-      text: "Lore consistency stayed rock-solid well past 120 messages. Huge kudos to the creator for this setup!"
-    },
-    {
-      id: `${characterId}-c9`,
-      author: "astral_fox",
-      time: "3d ago",
-      likes: 7,
-      text: "The tone and atmosphere are unmatched. Perfect balance of narrative progression and character agency."
-    },
-    {
-      id: `${characterId}-c10`,
-      author: "shadow_byte",
-      time: "4d ago",
-      likes: 6,
-      text: "One of the few bots where the replies never feel repetitive or generic. Instant favourite!"
-    },
-    {
-      id: `${characterId}-c11`,
-      author: "lunar_drift",
-      time: "5d ago",
-      likes: 5,
-      text: "Really creative scenario execution. Looking forward to any lore expansions or updates from this creator."
-    },
-    {
-      id: `${characterId}-c12`,
-      author: "neon_samurai",
-      time: "6d ago",
-      likes: 4,
-      text: "Brilliant character design! Highly recommend trying out slow-burn scenarios with this one."
-    }
-  ];
-
-  try {
-    localStorage.setItem(storageKey, JSON.stringify(seedComments));
-  } catch {}
-
-  return seedComments;
+  return [];
 }
 
 async function ensureBotDetails(character) {
   if (!character || !character.characterId) return;
-  if (character.avatar && character.creator) return;
 
   const key = `jstats_bot_meta_${character.characterId}`;
   try {
@@ -540,27 +467,85 @@ async function ensureBotDetails(character) {
       if (changed) {
         renderBotShowcase(character, getWindowSnapshots().at(-1) || state.snapshots.at(-1));
       }
-      return;
     }
   } catch {}
 
+  // Request latest details from extension bridge if active
   try {
-    const res = await fetch(`https://janitorai.com/api/characters/${encodeURIComponent(character.characterId)}`, {
-      mode: "cors"
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const bot = data.data || data;
-      const avatar = bot.avatar || null;
-      const creator = bot.creator_name || bot.creator?.name || bot.creator_username || (typeof bot.creator === "string" ? bot.creator : null) || bot.user?.name || null;
-      if (avatar || creator) {
-        if (avatar && !character.avatar) character.avatar = avatar;
-        if (creator && !character.creator) character.creator = creator;
-        localStorage.setItem(key, JSON.stringify({ avatar: character.avatar, creator: character.creator }));
-        renderBotShowcase(character, getWindowSnapshots().at(-1) || state.snapshots.at(-1));
-      }
-    }
+    window.postMessage({
+      source: "JSTATS_DASHBOARD",
+      type: "GET_BOT_DETAILS",
+      payload: { characterId: character.characterId }
+    }, "*");
   } catch {}
+}
+
+function openEditBotModal(character) {
+  if (!character) return;
+  const overlay = document.getElementById("editBotModalOverlay");
+  const avatarInput = document.getElementById("editBotAvatarInput");
+  const creatorInput = document.getElementById("editBotCreatorInput");
+  if (!overlay || !avatarInput || !creatorInput) return;
+
+  avatarInput.value = character.avatar || "";
+  creatorInput.value = character.creator || character.creator_name || character.creator_username || "";
+
+  overlay.classList.add("open");
+  avatarInput.focus();
+}
+
+function closeEditBotModal() {
+  const overlay = document.getElementById("editBotModalOverlay");
+  if (overlay) overlay.classList.remove("open");
+}
+
+async function handleEditBotSubmit(e) {
+  e.preventDefault();
+  const character = getCurrent();
+  if (!character) return;
+
+  const avatarInput = document.getElementById("editBotAvatarInput");
+  const creatorInput = document.getElementById("editBotCreatorInput");
+  const avatarVal = (avatarInput?.value || "").trim();
+  const creatorVal = (creatorInput?.value || "").trim().replace(/^@/, "");
+
+  character.avatar = avatarVal || null;
+  character.creator = creatorVal || null;
+
+  // 1. Save locally
+  try {
+    localStorage.setItem(`jstats_bot_meta_${character.characterId}`, JSON.stringify({
+      avatar: character.avatar,
+      creator: character.creator
+    }));
+  } catch {}
+
+  // 2. Persist to Supabase
+  try {
+    await updateTrackedJobMetadata(character.characterId, {
+      avatar: character.avatar,
+      creator: character.creator
+    });
+  } catch (err) {
+    console.warn("JStats: failed to update bot metadata in Supabase", err);
+  }
+
+  // 3. Notify extension bridge
+  try {
+    window.postMessage({
+      source: "JSTATS_DASHBOARD",
+      type: "UPDATE_BOT_META",
+      payload: {
+        characterId: character.characterId,
+        avatar: character.avatar,
+        creator: character.creator
+      }
+    }, "*");
+  } catch {}
+
+  closeEditBotModal();
+  renderBotShowcase(character, getWindowSnapshots().at(-1) || state.snapshots.at(-1));
+  showToast("Bot profile details updated!");
 }
 
 function renderBotShowcase(character, latest) {
@@ -576,10 +561,10 @@ function renderBotShowcase(character, latest) {
   showcaseEl.style.display = "block";
 
   const charName = character.characterName || "JanitorAI Character";
-  const creatorName = character.creator || character.creator_name || character.creator_username || "JanitorAI Creator";
+  const creatorName = character.creator || character.creator_name || character.creator_username || "";
   const avatarUrl = getBotAvatarUrl(character.avatar || character.avatar_url);
   const initials = getInitials(charName);
-  const botUrl = character.url || `https://janitorai.com/characters/${character.characterId}`;
+  const botUrl = (character.url || `https://janitorai.com/characters/${character.characterId}`).split("#")[0];
 
   // Shifted lifetime totals
   const totalMsgs = latest?.msgs;
@@ -588,8 +573,8 @@ function renderBotShowcase(character, latest) {
   const totalPubChats = latest?.publishedChats ?? character.publishedChats;
   const totalComments = latest?.comments;
 
-  // Comments management
-  const allComments = getCommentsForCharacter(character.characterId, charName);
+  // Comments management (Strictly Real Reviews Only - No fake comments)
+  const allComments = getCommentsForCharacter(character.characterId);
   const visibleComments = allComments.slice(0, commentsVisibleLimit);
   const hasMore = visibleComments.length < allComments.length;
 
@@ -604,7 +589,7 @@ function renderBotShowcase(character, latest) {
                 <div class="bot-comment-avatar" style="background: ${color};">${escapeHtml(userInitials)}</div>
                 <div class="bot-comment-meta">
                   <span class="bot-comment-author">@${escapeHtml(c.author)}</span>
-                  <span class="bot-comment-time">${escapeHtml(c.time)}</span>
+                  <span class="bot-comment-time">${escapeHtml(c.time || "")}</span>
                 </div>
               </div>
               <div class="bot-comment-likes">❤️ ${Number(c.likes || 0).toLocaleString()}</div>
@@ -613,7 +598,19 @@ function renderBotShowcase(character, latest) {
           </div>
         `;
       }).join("")
-    : `<div class="empty-comments">No comments recorded for this bot yet.</div>`;
+    : `
+      <div class="bot-comments-empty">
+        <div class="empty-comments-icon-wrap">
+          <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+        </div>
+        <div class="empty-comments-title">No reviews synced yet</div>
+        <p class="empty-comments-desc">Real community reviews sync automatically when you view this bot on JanitorAI with the extension active.</p>
+        <a href="${escapeHtml(botUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm empty-comments-action">
+          <span>View Reviews on JanitorAI</span>
+          <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+        </a>
+      </div>
+    `;
 
   showcaseEl.innerHTML = `
     <div class="bot-showcase-grid">
@@ -640,8 +637,12 @@ function renderBotShowcase(character, latest) {
             <div class="bot-creator-line">
               <span>
                 <svg class="bot-creator-icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                By <span class="bot-creator-text">@${escapeHtml(creatorName)}</span>
+                By <span class="bot-creator-text">${creatorName ? `@${escapeHtml(creatorName)}` : `<span class="bot-creator-unset">Unknown Creator</span>`}</span>
               </span>
+              <button type="button" class="btn btn-ghost btn-xs bot-edit-details-btn" id="openEditBotModalBtn" title="Set bot avatar image and creator handle">
+                <svg viewBox="0 0 24 24" style="width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; margin-right: 3px;"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                <span>Edit Info</span>
+              </button>
               <a href="${escapeHtml(botUrl)}" target="_blank" rel="noopener noreferrer" class="bot-open-link" title="Open character page on JanitorAI">
                 <span>View on JanitorAI</span>
                 <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
@@ -693,7 +694,7 @@ function renderBotShowcase(character, latest) {
             <svg class="bot-comments-icon" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
             <h3>Bot Comments & Reviews</h3>
           </div>
-          <span class="bot-comments-badge">${allComments.length.toLocaleString()} reviews</span>
+          <span class="bot-comments-badge">${allComments.length > 0 ? `${allComments.length.toLocaleString()} reviews` : (totalComments ? `${Number(totalComments).toLocaleString()} reviews on JanitorAI` : "0 reviews")}</span>
         </div>
 
         <div class="bot-comments-list" id="botCommentsList">
@@ -702,7 +703,7 @@ function renderBotShowcase(character, latest) {
 
         <div class="bot-comments-footer ${!hasMore ? 'all-loaded' : ''}">
           <span class="bot-comments-count-info">
-            ${hasMore ? `Showing top ${visibleComments.length} of ${allComments.length} comments` : `All ${allComments.length} comments displayed`}
+            ${allComments.length === 0 ? "No fake comments • Real synced reviews only" : (hasMore ? `Showing top ${visibleComments.length} of ${allComments.length} comments` : `All ${allComments.length} comments displayed`)}
           </span>
           ${hasMore ? `
             <button type="button" class="btn btn-secondary btn-sm" id="loadMoreCommentsBtn">
@@ -714,6 +715,13 @@ function renderBotShowcase(character, latest) {
       </article>
     </div>
   `;
+
+  const editBtn = showcaseEl.querySelector("#openEditBotModalBtn");
+  if (editBtn) {
+    editBtn.addEventListener("click", () => {
+      openEditBotModal(character);
+    });
+  }
 
   const loadMoreBtn = showcaseEl.querySelector("#loadMoreCommentsBtn");
   if (loadMoreBtn) {
@@ -1305,14 +1313,31 @@ async function load() {
     if (supabaseJobs && supabaseJobs.length > 0) {
       trackedJobs = supabaseJobs;
       for (const job of supabaseJobs) {
+        let avatar = job.avatar || null;
+        let creator = job.creator || null;
+        if (job.url && job.url.includes("#meta=")) {
+          try {
+            const raw = job.url.slice(job.url.indexOf("#meta=") + 6);
+            const parsed = JSON.parse(decodeURIComponent(raw));
+            if (parsed.avatar && !avatar) avatar = parsed.avatar;
+            if (parsed.creator && !creator) creator = parsed.creator;
+          } catch {}
+        }
         if (!charMap.has(job.character_id)) {
           charMap.set(job.character_id, {
             characterId: job.character_id,
             characterName: job.character_name,
             url: job.url,
+            avatar,
+            creator,
             createdAt: job.created_at,
             lastSeen: job.last_scraped_at
           });
+        } else {
+          const existing = charMap.get(job.character_id);
+          if (avatar && !existing.avatar) existing.avatar = avatar;
+          if (creator && !existing.creator) existing.creator = creator;
+          if (job.url && !existing.url) existing.url = job.url;
         }
       }
     }
@@ -1337,6 +1362,18 @@ async function load() {
             lastSeen: job.last_scraped_at
           });
         }
+      }
+    } catch {}
+  }
+
+  // Check cached metadata in localStorage
+  for (const char of charMap.values()) {
+    try {
+      const cached = localStorage.getItem(`jstats_bot_meta_${char.characterId}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed.avatar && !char.avatar) char.avatar = parsed.avatar;
+        if (parsed.creator && !char.creator) char.creator = parsed.creator;
       }
     } catch {}
   }
@@ -1523,14 +1560,74 @@ function setupEventListeners() {
   });
   document.getElementById("entryForm")?.addEventListener("submit", handleManualEntrySubmit);
 
+  // Edit Bot Details Modal listeners
+  document.getElementById("closeEditBotModalBtn")?.addEventListener("click", closeEditBotModal);
+  document.getElementById("cancelEditBotModalBtn")?.addEventListener("click", closeEditBotModal);
+  document.getElementById("editBotModalOverlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "editBotModalOverlay") closeEditBotModal();
+  });
+  document.getElementById("editBotForm")?.addEventListener("submit", handleEditBotSubmit);
+
   setupDragAndDrop();
   setupTooltips();
+
+  // Listen for real-time extension bridge sync (real reviews and metadata)
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || !event.data) return;
+    const msg = event.data;
+    if (msg.source !== "JSTATS_EXTENSION") return;
+
+    if (msg.type === "BOT_DETAILS_RESOLVED" && msg.payload) {
+      const { characterId, avatar, creator, reviews } = msg.payload;
+      const character = getCurrent();
+      if (character && character.characterId === characterId) {
+        let changed = false;
+        if (avatar && !character.avatar) {
+          character.avatar = avatar;
+          changed = true;
+        }
+        if (creator && !character.creator) {
+          character.creator = creator;
+          changed = true;
+        }
+        if (changed) {
+          try {
+            localStorage.setItem(`jstats_bot_meta_${characterId}`, JSON.stringify({
+              avatar: character.avatar,
+              creator: character.creator
+            }));
+          } catch {}
+        }
+        if (Array.isArray(reviews) && reviews.length > 0) {
+          try {
+            localStorage.setItem(`jstats_comments_${characterId}`, JSON.stringify(reviews));
+          } catch {}
+          changed = true;
+        }
+        if (changed) {
+          renderBotShowcase(character, getWindowSnapshots().at(-1) || state.snapshots.at(-1));
+        }
+      }
+    } else if (msg.type === "REVIEWS_SYNCED" && msg.payload) {
+      const { characterId, reviews } = msg.payload;
+      if (Array.isArray(reviews) && reviews.length > 0) {
+        try {
+          localStorage.setItem(`jstats_comments_${characterId}`, JSON.stringify(reviews));
+        } catch {}
+        const character = getCurrent();
+        if (character && character.characterId === characterId) {
+          renderBotShowcase(character, getWindowSnapshots().at(-1) || state.snapshots.at(-1));
+        }
+      }
+    }
+  });
 
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       closeEntryModal();
       closeTrackModal();
       closeSupabaseModal();
+      closeEditBotModal();
       const confirmModal = document.getElementById("confirmModalOverlay");
       if (confirmModal) confirmModal.classList.remove("open");
     }

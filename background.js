@@ -1,10 +1,11 @@
-import { getAllCharacters, saveCharacterSnapshot, importLegacyCharacters } from "./db.js";
+import { getAllCharacters, getCharacter, saveCharacterSnapshot, importLegacyCharacters } from "./db.js";
 import {
   getSupabaseConfig,
   fetchTrackedJobs,
   saveTrackedJob,
   insertSnapshot,
-  updateTrackedJobStatus
+  updateTrackedJobStatus,
+  updateTrackedJobMetadata
 } from "./supabase.js";
 
 const ALARM_NAME = "janitorai-stats-refresh";
@@ -352,6 +353,8 @@ export async function processAndSaveScrapedCharacter(cleanId, raw, jobMetadata =
     await saveTrackedJob({
       ...jobMetadata,
       character_name: charName,
+      avatar: charMetadata.avatar || jobMetadata.avatar || null,
+      creator: charMetadata.creator || jobMetadata.creator || null,
       last_scraped_at: snapshot.timestamp
     });
   }
@@ -628,6 +631,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           characterId: payload.characterId,
           characterName: payload.characterName,
           url: payload.url,
+          avatar: payload.avatar || null,
+          creator: payload.creator || null,
           createdAt: payload.createdAt,
           updatedAt: payload.updatedAt,
           publishedAt: payload.publishedAt
@@ -637,6 +642,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // Forward to Supabase in real time
       await insertSnapshot(payload.characterId, snapshot);
+
+      // If metadata provided, update Supabase tracked job
+      if (payload.avatar || payload.creator) {
+        updateTrackedJobMetadata(payload.characterId, {
+          avatar: payload.avatar,
+          creator: payload.creator
+        }).catch(() => {});
+      }
 
       // Resolve pending background tab scrape if waiting
       if (pendingTabScrapes.has(payload.characterId)) {
@@ -747,6 +760,87 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getJanitorToken()
       .then(token => sendResponse({ ok: true, token }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  // 6. GET_BOT_DETAILS
+  if (message?.type === "GET_BOT_DETAILS") {
+    (async () => {
+      const charId = cleanUuid(message.payload?.characterId);
+      if (!charId) return { ok: false, error: "Missing characterId" };
+
+      // 1. Check local IndexedDB
+      let char = null;
+      try { char = await getCharacter(charId); } catch {}
+      let avatar = char?.avatar || null;
+      let creator = char?.creator || null;
+
+      // 2. Query open JanitorAI tabs
+      try {
+        const openTabs = await chrome.tabs.query({
+          url: ["*://janitorai.com/*", "*://www.janitorai.com/*"]
+        });
+        for (const tab of openTabs) {
+          if (!tab.id) continue;
+          try {
+            const res = await chrome.tabs.sendMessage(tab.id, {
+              type: "GET_CHARACTER_PAGE_DETAILS",
+              characterId: charId
+            });
+            if (res?.ok) {
+              if (res.avatar && !avatar) avatar = res.avatar;
+              if (res.creator && !creator) creator = res.creator;
+              if (Array.isArray(res.reviews) && res.reviews.length > 0) {
+                await chrome.storage.local.set({ [`jstats_reviews_${charId}`]: res.reviews });
+              }
+              if (avatar || creator) break;
+            }
+          } catch {}
+        }
+      } catch {}
+
+      // 3. Read cached reviews
+      const revStore = await chrome.storage.local.get(`jstats_reviews_${charId}`).catch(() => ({}));
+      const reviews = revStore[`jstats_reviews_${charId}`] || [];
+
+      return {
+        ok: true,
+        characterId: charId,
+        avatar,
+        creator,
+        reviews
+      };
+    })()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  // 7. UPDATE_BOT_META
+  if (message?.type === "UPDATE_BOT_META") {
+    (async () => {
+      const { characterId, avatar, creator } = message.payload || {};
+      const cleanId = cleanUuid(characterId);
+      if (!cleanId) return { ok: false };
+
+      try {
+        const char = await getCharacter(cleanId);
+        if (char) {
+          if (avatar) char.avatar = avatar;
+          if (creator) char.creator = creator;
+          const db = await openTrackerDb();
+          const tx = db.transaction("characters", "readwrite");
+          tx.objectStore("characters").put(char);
+          await new Promise(r => tx.oncomplete = r);
+          db.close();
+        }
+      } catch {}
+
+      await updateTrackedJobMetadata(cleanId, { avatar, creator });
+      return { ok: true };
+    })()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
 

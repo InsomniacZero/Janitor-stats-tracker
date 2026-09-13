@@ -8,12 +8,18 @@ CREATE TABLE IF NOT EXISTS tracked_jobs (
   character_id TEXT PRIMARY KEY,
   character_name TEXT NOT NULL,
   url TEXT NOT NULL,
+  avatar TEXT,
+  creator TEXT,
   started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '72 hours'),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'paused')),
   last_scraped_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Ensure columns exist if upgrading an existing table
+ALTER TABLE tracked_jobs ADD COLUMN IF NOT EXISTS avatar TEXT;
+ALTER TABLE tracked_jobs ADD COLUMN IF NOT EXISTS creator TEXT;
 
 -- 2. Create Character Snapshots Table
 CREATE TABLE IF NOT EXISTS character_snapshots (

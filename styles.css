@@ -2446,6 +2446,125 @@ input[type="number"] {
   font-family: var(--font-mono);
 }
 
+/* Honest Empty State for Reviews */
+.bot-comments-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px 16px;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px dashed var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  margin: 4px 0;
+}
+
+.empty-comments-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--claude-accent-wash);
+  border: 1px solid rgba(217, 119, 87, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.empty-comments-icon-wrap svg {
+  width: 20px;
+  height: 20px;
+  stroke: var(--claude-accent);
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.empty-comments-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 6px;
+}
+
+.empty-comments-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  max-width: 320px;
+  margin: 0 auto 14px auto;
+}
+
+.empty-comments-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.empty-comments-action svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+/* Edit Details Button in Bot Profile */
+.bot-edit-details-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.bot-edit-details-btn:hover {
+  color: var(--claude-accent);
+  background: var(--claude-accent-wash);
+  border-color: rgba(217, 119, 87, 0.3);
+}
+
+.bot-creator-unset {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+/* Input Prefix Wrap for modals */
+.input-prefix-wrap {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: 100%;
+}
+
+.input-prefix-wrap .input-prefix {
+  position: absolute;
+  left: 12px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.input-prefix-wrap input {
+  padding-left: 28px !important;
+  width: 100%;
+}
+
 /* --- Shifted Ratio Spotlight inside 'Growth & Ratios' --- */
 .ratio-spotlight-panel {
   background: linear-gradient(145deg, rgba(196, 167, 231, 0.08) 0%, rgba(26, 24, 21, 0.95) 100%);

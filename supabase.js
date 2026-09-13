@@ -148,7 +148,20 @@ export async function fetchTrackedJobs() {
     });
 
     if (!res.ok) return [];
-    return await res.json();
+    const jobs = await res.json();
+    if (Array.isArray(jobs)) {
+      for (const job of jobs) {
+        if (job.url && job.url.includes("#meta=")) {
+          try {
+            const rawMeta = job.url.slice(job.url.indexOf("#meta=") + 6);
+            const parsedMeta = JSON.parse(decodeURIComponent(rawMeta));
+            if (parsedMeta.avatar && !job.avatar) job.avatar = parsedMeta.avatar;
+            if (parsedMeta.creator && !job.creator) job.creator = parsedMeta.creator;
+          } catch {}
+        }
+      }
+    }
+    return jobs;
   } catch (err) {
     console.warn("JStats: failed to fetch tracked jobs from Supabase", err);
     return [];
@@ -162,10 +175,32 @@ export async function saveTrackedJob(job) {
   const config = await getSupabaseConfig();
   if (!config) return false;
 
+  let url = job.url || `https://janitorai.com/characters/${job.character_id}`;
+  const baseUrl = url.split("#")[0];
+
+  // Preserve or extract existing metadata
+  let existingMeta = {};
+  if (url.includes("#meta=")) {
+    try {
+      existingMeta = JSON.parse(decodeURIComponent(url.slice(url.indexOf("#meta=") + 6)));
+    } catch {}
+  }
+
+  const avatar = job.avatar || existingMeta.avatar || null;
+  const creator = job.creator || existingMeta.creator || null;
+
+  const metaObj = { ...existingMeta };
+  if (avatar) metaObj.avatar = avatar;
+  if (creator) metaObj.creator = creator;
+
+  const fullUrl = Object.keys(metaObj).length > 0
+    ? `${baseUrl}#meta=${encodeURIComponent(JSON.stringify(metaObj))}`
+    : baseUrl;
+
   const payload = {
     character_id: job.character_id,
     character_name: job.character_name || "JanitorAI Character",
-    url: job.url || `https://janitorai.com/characters/${job.character_id}`,
+    url: fullUrl,
     started_at: job.started_at || new Date().toISOString(),
     expires_at: job.expires_at || new Date(Date.now() + 72 * 3600 * 1000).toISOString(),
     status: job.status || "active",
@@ -187,6 +222,60 @@ export async function saveTrackedJob(job) {
     return res.ok;
   } catch (err) {
     console.error("JStats: failed to save tracked job to Supabase", err);
+    return false;
+  }
+}
+
+/**
+ * Updates metadata (avatar, creator) for a tracked character in Supabase.
+ */
+export async function updateTrackedJobMetadata(characterId, { avatar, creator }) {
+  const config = await getSupabaseConfig();
+  if (!config || !characterId) return false;
+
+  try {
+    const fetchRes = await fetch(`${config.url}/rest/v1/tracked_jobs?character_id=eq.${encodeURIComponent(characterId)}&limit=1`, {
+      headers: {
+        apikey: config.anonKey,
+        Authorization: `Bearer ${config.anonKey}`,
+        Accept: "application/json"
+      }
+    });
+
+    if (!fetchRes.ok) return false;
+    const items = await fetchRes.json();
+    const currentJob = items?.[0];
+    if (!currentJob) return false;
+
+    let baseUrl = (currentJob.url || `https://janitorai.com/characters/${characterId}`).split("#")[0];
+    let metaObj = {};
+    if (currentJob.url && currentJob.url.includes("#meta=")) {
+      try {
+        metaObj = JSON.parse(decodeURIComponent(currentJob.url.slice(currentJob.url.indexOf("#meta=") + 6)));
+      } catch {}
+    }
+
+    if (avatar !== undefined && avatar !== null) metaObj.avatar = avatar;
+    if (creator !== undefined && creator !== null) metaObj.creator = creator;
+
+    const newUrl = Object.keys(metaObj).length > 0
+      ? `${baseUrl}#meta=${encodeURIComponent(JSON.stringify(metaObj))}`
+      : baseUrl;
+
+    const patchRes = await fetch(`${config.url}/rest/v1/tracked_jobs?character_id=eq.${encodeURIComponent(characterId)}`, {
+      method: "PATCH",
+      headers: {
+        apikey: config.anonKey,
+        Authorization: `Bearer ${config.anonKey}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation"
+      },
+      body: JSON.stringify({ url: newUrl })
+    });
+
+    return patchRes.ok;
+  } catch (err) {
+    console.error("JStats: failed to update job metadata in Supabase", err);
     return false;
   }
 }

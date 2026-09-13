@@ -17,6 +17,7 @@
   window.__JSTATS_MAIN_LOADED__ = true;
 
   const exactStatsCache = new Map(); // cleanId -> stats object
+  const exactReviewsCache = new Map(); // cleanId -> array of real review objects
 
   function cleanUuid(val) {
     if (!val) return null;
@@ -71,6 +72,62 @@
       }
     } catch {}
     return null;
+  }
+
+  /**
+   * Recursively extracts real user reviews from network payloads.
+   * Never fabricates reviews - only extracts authentic user comments.
+   */
+  function extractAllReviews(obj, depth = 0, results = [], seen = new Set()) {
+    if (!obj || depth > 5) return results;
+
+    if (Array.isArray(obj)) {
+      for (const item of obj) extractAllReviews(item, depth + 1, results, seen);
+      return results;
+    }
+
+    if (typeof obj !== "object") return results;
+
+    const text = obj.text || obj.comment || obj.content || obj.body || obj.review;
+    const author =
+      obj.author ||
+      obj.author_name ||
+      obj.user?.name ||
+      obj.user?.username ||
+      obj.creator_name ||
+      obj.username ||
+      (typeof obj.user === "string" ? obj.user : null);
+
+    const rawId = obj.id || obj.review_id || obj._id || (author && text ? `${author}_${text.slice(0, 16)}` : null);
+    const reviewId = rawId ? String(rawId).replace(/[^a-zA-Z0-9_-]/g, "") : null;
+
+    if (
+      text &&
+      typeof text === "string" &&
+      text.trim().length > 1 &&
+      author &&
+      reviewId &&
+      !seen.has(reviewId)
+    ) {
+      seen.add(reviewId);
+      const likes = Number(obj.likes ?? obj.like_count ?? obj.upvotes ?? obj.reactions?.like ?? 0) || 0;
+      const time = obj.created_at || obj.createdAt || obj.date || "";
+      results.push({
+        id: reviewId,
+        author: String(author).trim().replace(/^@/, ""),
+        time: String(time).trim(),
+        likes,
+        text: String(text).trim()
+      });
+    }
+
+    for (const k of Object.keys(obj)) {
+      if (typeof obj[k] === "object" && obj[k] !== null && k !== "stats") {
+        extractAllReviews(obj[k], depth + 1, results, seen);
+      }
+    }
+
+    return results;
   }
 
   /**
@@ -159,8 +216,17 @@
         comments: Number.isFinite(comments) && comments >= 0 ? comments : null,
         commentsDisplay: Number.isFinite(comments) && comments >= 0 ? comments.toLocaleString() : null,
         characterName: obj.name || obj.character_name || null,
-        avatar: obj.avatar || null,
-        creator: obj.creator_name || obj.creator?.name || obj.creator_username || (typeof obj.creator === "string" ? obj.creator : null) || obj.user?.name || null,
+        avatar: obj.avatar || obj.image || obj.avatar_url || obj.avatarUrl || null,
+        creator:
+          obj.creator_name ||
+          obj.creator?.name ||
+          obj.creator?.username ||
+          obj.creator_username ||
+          (typeof obj.creator === "string" ? obj.creator : null) ||
+          obj.user?.name ||
+          obj.user?.username ||
+          obj.author_name ||
+          null,
         createdAt: obj.created_at || obj.createdAt || null,
         updatedAt: obj.updated_at || obj.updatedAt || null,
         publishedAt: obj.published_at || obj.publishedAt || null,
@@ -241,6 +307,24 @@
             if (found.length > 0) {
               cacheAndBroadcastCharacters(found, inputUrl);
             }
+
+            // Also check for reviews in the response
+            if (inputUrl.includes("review") || inputUrl.includes("comment")) {
+              const reviews = extractAllReviews(payload);
+              const cid = cleanUuid(inputUrl) || cleanUuid(location.pathname);
+              if (reviews.length > 0 && cid) {
+                exactReviewsCache.set(cid, reviews);
+                window.postMessage(
+                  {
+                    source: "JSTATS_MAIN",
+                    type: "REVIEWS_CAPTURED",
+                    characterId: cid,
+                    reviews
+                  },
+                  "*"
+                );
+              }
+            }
           })
           .catch(() => {});
       }
@@ -265,7 +349,9 @@
           url.includes("/characters") ||
           url.includes("/hampter/") ||
           url.includes("following") ||
-          url.includes("/feed")
+          url.includes("/feed") ||
+          url.includes("review") ||
+          url.includes("comment")
         ) {
           let payload = null;
           if (this.responseType === "json" && this.response) {
@@ -277,6 +363,23 @@
             const found = extractAllCharacters(payload);
             if (found.length > 0) {
               cacheAndBroadcastCharacters(found, url);
+            }
+
+            if (url.includes("review") || url.includes("comment")) {
+              const reviews = extractAllReviews(payload);
+              const cid = cleanUuid(url) || cleanUuid(location.pathname);
+              if (reviews.length > 0 && cid) {
+                exactReviewsCache.set(cid, reviews);
+                window.postMessage(
+                  {
+                    source: "JSTATS_MAIN",
+                    type: "REVIEWS_CAPTURED",
+                    characterId: cid,
+                    reviews
+                  },
+                  "*"
+                );
+              }
             }
           }
         }
@@ -540,7 +643,68 @@
         "*"
       );
     }
+
+    if (e.data.type === "REQUEST_REVIEWS") {
+      const charId = cleanUuid(e.data.characterId) || cleanUuid(location.pathname);
+      let reviews = charId ? exactReviewsCache.get(charId) || [] : [];
+      if (!reviews.length && charId) {
+        reviews = await inPageFetchReviews(charId);
+      }
+      window.postMessage(
+        {
+          source: "JSTATS_MAIN",
+          type: "REVIEWS_RESPONSE",
+          requestId: e.data.requestId,
+          characterId: charId,
+          reviews: reviews || []
+        },
+        "*"
+      );
+    }
   });
+
+  // 8. In-page active fetch for character reviews
+  async function inPageFetchReviews(characterId) {
+    const cleanId = cleanUuid(characterId);
+    if (!cleanId) return [];
+
+    const cached = exactReviewsCache.get(cleanId);
+    if (cached && cached.length > 0) return cached;
+
+    const token = parseTokenFromCookieString(document.cookie);
+    const headers = { Accept: "application/json, text/plain, */*" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const endpoints = [
+      `/hampter/characters/${cleanId}/reviews`,
+      `/hampter/reviews?character_id=${cleanId}`,
+      `/api/characters/${cleanId}/reviews`
+    ];
+
+    for (const ep of endpoints) {
+      try {
+        const res = await originalFetch(ep, { credentials: "include", headers });
+        if (res.ok) {
+          const json = await res.json();
+          const reviews = extractAllReviews(json);
+          if (reviews.length > 0) {
+            exactReviewsCache.set(cleanId, reviews);
+            window.postMessage(
+              {
+                source: "JSTATS_MAIN",
+                type: "REVIEWS_CAPTURED",
+                characterId: cleanId,
+                reviews
+              },
+              "*"
+            );
+            return reviews;
+          }
+        }
+      } catch {}
+    }
+    return [];
+  }
 
   // 8. Auto-scan DOM for cards on initial load, mutations, and periodic intervals
   setTimeout(scanCardsInMainWorld, 750);
