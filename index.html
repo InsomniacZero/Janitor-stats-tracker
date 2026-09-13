@@ -281,8 +281,7 @@
     <div class="modal-card">
       <div class="modal-header">
         <div>
-          <h3 id="trackModalTitle">Track JanitorAI Bot (1m Scraper)</h3>
-          <p class="modal-subtitle">Log this bot every minute for 3 days without keeping the site or Janitor tabs open.</p>
+          <h3 id="trackModalTitle">Track using link</h3>
         </div>
         <button class="modal-close" id="closeTrackModalBtn" aria-label="Close">&times;</button>
       </div>
@@ -310,11 +309,29 @@
 
         <div class="form-row">
           <div class="form-group">
-            <label for="trackDurationSelect">Tracking Duration</label>
-            <select id="trackDurationSelect" class="form-select">
-              <option value="72" selected>3 Days (72 Hours) — 4,320 snapshots</option>
-              <option value="24">1 Day (24 Hours) — 1,440 snapshots</option>
-              <option value="168">7 Days (168 Hours) — 10,080 snapshots</option>
+            <label for="trackDurationTrigger">Tracking Duration</label>
+            <div class="custom-select-wrap" id="trackDurationCustomSelect">
+              <button type="button" class="custom-select-trigger" id="trackDurationTrigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="custom-select-label" id="trackDurationCurrent">3 Days (72 Hours)</span>
+                <svg class="custom-select-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+              <div class="custom-select-menu" id="trackDurationMenu" role="listbox" style="display: none;">
+                <button type="button" class="custom-select-item is-selected" data-value="72">
+                  <span class="custom-select-item-text">3 Days (72 Hours)</span>
+                  <svg class="custom-select-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+                </button>
+                <button type="button" class="custom-select-item" data-value="24">
+                  <span class="custom-select-item-text">1 Day (24 Hours)</span>
+                </button>
+                <button type="button" class="custom-select-item" data-value="168">
+                  <span class="custom-select-item-text">7 Days (168 Hours)</span>
+                </button>
+              </div>
+            </div>
+            <select id="trackDurationSelect" class="form-select" style="display: none;">
+              <option value="72" selected>3 Days (72 Hours)</option>
+              <option value="24">1 Day (24 Hours)</option>
+              <option value="168">7 Days (168 Hours)</option>
             </select>
           </div>
           <div class="form-group">

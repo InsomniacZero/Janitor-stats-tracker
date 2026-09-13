@@ -739,9 +739,7 @@ function renderInsights() {
 function renderMeta(character) {
   const meta = [];
   if (character.publishedAt) meta.push(`Published · ${character.publishedAt}`);
-  if (character.createdAt) meta.push(`Created · ${character.createdAt}`);
   if (character.updatedAt) meta.push(`Updated · ${character.updatedAt}`);
-  meta.push(`${state.snapshots.length.toLocaleString()} stored samples`);
   if (character.publishedChats != null) meta.push(`${formatNumber(character.publishedChats)} published chats`);
   const metaEl = document.getElementById("meta");
   if (metaEl) {
@@ -916,6 +914,18 @@ function closeCustomSelect() {
   }
 }
 
+function closeDurationSelect() {
+  const trigger = document.getElementById("trackDurationTrigger");
+  const menu = document.getElementById("trackDurationMenu");
+  if (trigger) {
+    trigger.classList.remove("is-open");
+    trigger.setAttribute("aria-expanded", "false");
+  }
+  if (menu) {
+    menu.style.display = "none";
+  }
+}
+
 function setupStepperControls() {
   document.querySelectorAll(".stepper-btn").forEach(btn => {
     btn.addEventListener("click", (e) => {
@@ -996,7 +1006,7 @@ function renderTrackingCountdown() {
       pill.style.display = "inline-flex";
       pill.innerHTML = `
         <span class="tracking-pulse-dot"></span>
-        <span><strong>72h Tracker:</strong> ${totalHours}h ${totalMins}m remaining • 1m interval</span>
+        <span><strong>72h Tracker:</strong> ${totalHours}h ${totalMins}m remaining</span>
       `;
     } else {
       pill.className = "tracking-pill is-completed";
@@ -1054,7 +1064,7 @@ function updateScraperStatusUI() {
       <div class="scraper-banner is-active">
         <div class="scraper-banner-left">
           <span class="status-indicator-dot is-connected"></span>
-          <span><strong>Scraper Active:</strong> Chrome Extension connected • Scraping every 1m & syncing to Supabase</span>
+          <span><strong>Scraper Active:</strong> Chrome Extension connected</span>
         </div>
         <button type="button" class="btn-micro" id="manualScrapeTriggerBtn" data-tooltip="Trigger immediate scrape right now">
           <svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
@@ -1270,20 +1280,68 @@ async function load() {
 function setupEventListeners() {
   document.getElementById("charSelectTrigger")?.addEventListener("click", (e) => {
     e.stopPropagation();
+    closeDurationSelect();
     toggleCustomSelect();
   });
+
+  const durationTrigger = document.getElementById("trackDurationTrigger");
+  const durationMenu = document.getElementById("trackDurationMenu");
+  const durationCurrent = document.getElementById("trackDurationCurrent");
+  const durationSelect = document.getElementById("trackDurationSelect");
+
+  if (durationTrigger && durationMenu) {
+    durationTrigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = durationTrigger.classList.contains("is-open");
+      if (isOpen) {
+        closeDurationSelect();
+      } else {
+        closeCustomSelect();
+        durationTrigger.classList.add("is-open");
+        durationTrigger.setAttribute("aria-expanded", "true");
+        durationMenu.style.display = "flex";
+      }
+    });
+
+    durationMenu.querySelectorAll(".custom-select-item").forEach(item => {
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const val = item.dataset.value;
+        const text = item.querySelector(".custom-select-item-text")?.textContent?.trim() || item.textContent.trim();
+        if (durationSelect) durationSelect.value = val;
+        if (durationCurrent) durationCurrent.textContent = text;
+        durationMenu.querySelectorAll(".custom-select-item").forEach(i => {
+          i.classList.remove("is-selected");
+          i.querySelector(".custom-select-check")?.remove();
+        });
+        item.classList.add("is-selected");
+        const checkSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        checkSvg.setAttribute("class", "custom-select-check");
+        checkSvg.setAttribute("viewBox", "0 0 24 24");
+        checkSvg.innerHTML = '<polyline points="20 6 9 17 4 12"/>';
+        item.appendChild(checkSvg);
+        closeDurationSelect();
+      });
+    });
+  }
 
   document.addEventListener("click", (e) => {
     const wrap = document.getElementById("characterCustomSelect");
     if (wrap && !wrap.contains(e.target)) {
       closeCustomSelect();
     }
+    const durWrap = document.getElementById("trackDurationCustomSelect");
+    if (durWrap && !durWrap.contains(e.target)) {
+      closeDurationSelect();
+    }
   });
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       closeCustomSelect();
+      closeDurationSelect();
       closeEntryModal();
+      closeTrackModal();
     }
   });
 
@@ -1512,6 +1570,7 @@ function openTrackModal() {
 }
 
 function closeTrackModal() {
+  closeDurationSelect();
   const modal = document.getElementById("trackModalOverlay");
   if (modal) modal.classList.remove("open");
 }
