@@ -566,12 +566,41 @@ function renderBotShowcase(character, latest) {
   const initials = getInitials(charName);
   const botUrl = (character.url || `https://janitorai.com/characters/${character.characterId}`).split("#")[0];
 
-  // Shifted lifetime totals
-  const totalMsgs = latest?.msgs;
-  const totalChats = latest?.chats;
-  const totalFavs = latest?.favourites;
-  const totalPubChats = latest?.publishedChats ?? character.publishedChats;
-  const totalComments = latest?.comments;
+  const windowSnapshots = getWindowSnapshots();
+
+  const metricsConfig = [
+    { key: "msgs", label: "Messages", cls: "stat-messages", val: latest?.msgs },
+    { key: "chats", label: "Chats", cls: "stat-chats", val: latest?.chats },
+    { key: "favourites", label: "Favorites", cls: "stat-favs", val: latest?.favourites },
+    { key: "publishedChats", label: "Published Chats", cls: "stat-published", val: latest?.publishedChats ?? character.publishedChats },
+    { key: "comments", label: "Comments", cls: "stat-comments", val: latest?.comments }
+  ];
+
+  const cardsHtml = metricsConfig.map(m => {
+    const stats = getWindowStats(windowSnapshots, m.key);
+    const delta = stats?.delta;
+    const percent = stats?.percent;
+    const sign = delta == null ? "" : delta >= 0 ? "+" : "";
+    const growthCls = delta == null ? "" : delta >= 0 ? "up" : "down";
+
+    let growth;
+    if (stats && windowSnapshots.length >= 2) {
+      growth = `${sign}${formatNumber(delta)} ${percent == null ? "" : `(${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%)`} over ${formatDuration(stats.durationMs)}`.trim();
+    } else {
+      growth = "Need at least two samples";
+    }
+
+    const rate = `Rate: ${escapeHtml(formatRate(stats?.perHour))}`;
+
+    return `
+      <div class="bot-total-item ${m.cls}">
+        <span class="bot-total-label">${escapeHtml(m.label)}</span>
+        <span class="bot-total-val" title="${formatNumber(m.val)}">${formatNumber(m.val)}</span>
+        <div class="bot-total-growth ${growthCls}">${escapeHtml(growth)}</div>
+        <div class="bot-total-rate">${rate}</div>
+      </div>
+    `;
+  }).join("");
 
   showcaseEl.innerHTML = `
     <article class="bot-profile-card">
@@ -622,38 +651,16 @@ function renderBotShowcase(character, latest) {
       <div class="bot-totals-container">
         <div class="bot-totals-heading">
           <span>Current Lifetime Totals</span>
-          <span class="bot-totals-badge">All-time</span>
+          <div class="range-buttons" id="rangeControls"></div>
         </div>
         <div class="bot-totals-grid">
-          <div class="bot-total-item stat-messages">
-            <span class="bot-total-label">Messages</span>
-            <span class="bot-total-val" title="${formatNumber(totalMsgs)}">${formatNumber(totalMsgs)}</span>
-            <span class="bot-total-sub">Total messages</span>
-          </div>
-          <div class="bot-total-item stat-chats">
-            <span class="bot-total-label">Chats</span>
-            <span class="bot-total-val" title="${formatNumber(totalChats)}">${formatNumber(totalChats)}</span>
-            <span class="bot-total-sub">Total chats</span>
-          </div>
-          <div class="bot-total-item stat-favs">
-            <span class="bot-total-label">Favorites</span>
-            <span class="bot-total-val" title="${formatNumber(totalFavs)}">${formatNumber(totalFavs)}</span>
-            <span class="bot-total-sub">Total favorites</span>
-          </div>
-          <div class="bot-total-item stat-published">
-            <span class="bot-total-label">Published Chats</span>
-            <span class="bot-total-val" title="${formatNumber(totalPubChats)}">${formatNumber(totalPubChats)}</span>
-            <span class="bot-total-sub">Public chats</span>
-          </div>
-          <div class="bot-total-item stat-comments">
-            <span class="bot-total-label">Comments</span>
-            <span class="bot-total-val" title="${formatNumber(totalComments)}">${formatNumber(totalComments)}</span>
-            <span class="bot-total-sub">Community reviews</span>
-          </div>
+          ${cardsHtml}
         </div>
       </div>
     </article>
   `;
+
+  renderRangeControls();
 
   const editBtn = showcaseEl.querySelector("#openEditBotModalBtn");
   if (editBtn) {
@@ -664,32 +671,7 @@ function renderBotShowcase(character, latest) {
 }
 
 function renderCards() {
-  const windowSnapshots = getWindowSnapshots();
-  const latest = windowSnapshots.at(-1) || state.snapshots.at(-1);
-  const container = document.getElementById("cards");
-  if (!container) return;
-
-  // Filter out ratio from growth window cards (ratio shifted to Growth & Ratios)
-  const growthSeries = TRACKED_SERIES.filter(s => !s.isRatio && s.key !== "chatMsgRatio");
-
-  container.innerHTML = growthSeries.map(seriesInfo => {
-    const value = latest?.[seriesInfo.key];
-    const stats = getWindowStats(windowSnapshots, seriesInfo.key);
-    const delta = stats?.delta;
-    const percent = stats?.percent;
-    const sign = delta == null ? "" : delta >= 0 ? "+" : "";
-
-    let growth;
-    if (stats && windowSnapshots.length >= 2) {
-      growth = `${sign}${formatNumber(delta)} ${percent == null ? "" : `(${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%)`} over ${formatDuration(stats.durationMs)}`.trim();
-    } else {
-      growth = "Need at least two samples";
-    }
-
-    const secondary = `Rate: ${escapeHtml(formatRate(stats?.perHour))}`;
-    const cls = delta == null ? "" : delta >= 0 ? "up" : "down";
-    return `<article class="stat-card"><div class="stat-label">${escapeHtml(seriesInfo.label)} Growth</div><div class="stat-value">${escapeHtml(formatNumber(value))}</div><div class="stat-change ${cls}">${escapeHtml(growth)}</div><div class="stat-secondary">${escapeHtml(secondary)}</div></article>`;
-  }).join("");
+  // Merged into Current Lifetime Totals in renderBotShowcase
 }
 
 function renderInsights() {
@@ -728,57 +710,6 @@ function renderInsights() {
     ? `${((pubChats / chats) * 100).toFixed(1)}%`
     : null;
 
-  // Window statistics for Message / Chat Ratio Spotlight
-  const ratioStats = getWindowStats(windowSnapshots, "chatMsgRatio");
-  const ratioDelta = ratioStats?.delta;
-  const ratioPercent = ratioStats?.percent;
-  const ratioSign = ratioDelta == null ? "" : ratioDelta >= 0 ? "+" : "";
-  const ratioCls = ratioDelta == null ? "" : ratioDelta >= 0 ? "up" : "down";
-  const ratioGrowthText = (ratioStats && windowSnapshots.length >= 2)
-    ? `${ratioSign}${ratioDelta.toFixed(2)} ${ratioPercent == null ? "" : `(${ratioPercent >= 0 ? "+" : ""}${ratioPercent.toFixed(2)}%)`} over ${formatDuration(ratioStats.durationMs)}`
-    : "Active window tracked";
-
-  const ratioSpotlightHtml = `
-    <div class="ratio-spotlight-panel">
-      <div class="ratio-spotlight-top">
-        <div class="ratio-spotlight-title-group">
-          <span class="ratio-spotlight-dot"></span>
-          <div>
-            <div class="ratio-spotlight-label">Featured Engagement Ratio</div>
-            <h3 class="ratio-spotlight-name">Message / Chat Ratio (Conversation Depth)</h3>
-          </div>
-        </div>
-        <div class="ratio-spotlight-delta ${ratioCls}">
-          ${escapeHtml(ratioGrowthText)}
-        </div>
-      </div>
-      <div class="ratio-spotlight-metrics">
-        <div class="ratio-metric-primary">
-          <div class="ratio-big-value">${msgsPerChat ?? "—"}</div>
-          <div class="ratio-big-caption">Average messages exchanged per chat session</div>
-        </div>
-        <div class="ratio-metric-breakdown">
-          <div class="ratio-breakdown-row">
-            <span class="ratio-breakdown-label">Conversation Depth</span>
-            <span class="ratio-breakdown-val">${msgsPerChat ? `1 chat : ${msgsPerChat} msgs` : "—"}</span>
-          </div>
-          <div class="ratio-breakdown-row">
-            <span class="ratio-breakdown-label">Conversation Density</span>
-            <span class="ratio-breakdown-val">${msgsPerChat && Number(msgsPerChat) > 0 ? `${((1 / Number(msgsPerChat)) * 100).toFixed(2)}% chats/msg` : "—"}</span>
-          </div>
-          <div class="ratio-breakdown-row">
-            <span class="ratio-breakdown-label">Window Pace</span>
-            <span class="ratio-breakdown-val">${ratioStats ? `${escapeHtml(formatRate(ratioStats.perHour))} ratio/hr` : "Awaiting delta"}</span>
-          </div>
-          <div class="ratio-breakdown-row">
-            <span class="ratio-breakdown-label">Window Sample Scope</span>
-            <span class="ratio-breakdown-val">${formatNumber(msgs)} msgs · ${formatNumber(chats)} chats</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-
   const pairs = [
     ["Messages / Chat", msgsPerChat, "Average conversation depth"],
     ["Fave / Chat Rate", favRate, "Favourites per 100 chats"],
@@ -801,7 +732,6 @@ function renderInsights() {
   container.innerHTML = `
     <section class="panel insights-panel full">
       <div class="panel-head"><div><h2>Growth & ratios</h2><div class="panel-sub">Window: ${escapeHtml(RANGE_CONFIG[state.range]?.label || state.range)} · ${windowSnapshots.length.toLocaleString()} usable samples · ${escapeHtml(totalDuration)} covered</div></div></div>
-      ${ratioSpotlightHtml}
       <div class="insight-grid">${growthStats}${ratioHtml}</div>
     </section>`;
 }
