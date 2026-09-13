@@ -1,7 +1,7 @@
 const STAT_CONFIG = {
   chats: { label: "Chats", short: "Chats", color: "#81B29A" },
   msgs: { label: "Messages", short: "Msgs", color: "#d97757" },
-  chatMsgRatio: { label: "Chat / Message Ratio", short: "Msgs/Chat", color: "#c4a7e7", isRatio: true, unit: " msgs/chat" },
+  chatMsgRatio: { label: "Chat / Message Ratio", short: "Msgs/Chat", color: "#c4a7e7", isRatio: true, unit: "" },
   comments: { label: "Comments", short: "Comments", color: "#e0a458" },
   favourites: { label: "Favourites", short: "Faves", color: "#d97373" },
   publishedChats: { label: "Published chats", short: "Pub. chats", color: "#6a9bcc" }
@@ -276,7 +276,7 @@ function makeTooltipMarkup({ label, point, suffix = "", color = "#d97757" }) {
 
   const isRatio = label.toLowerCase().includes("ratio");
   const valueDisplay = isRatio && Number.isFinite(point.value)
-    ? `${point.value.toFixed(2)}${suffix || " msgs/chat"}`
+    ? `${point.value.toFixed(2)}${suffix}`
     : `${formatNumber(point.value)}${suffix}`;
 
   const deltaDisplay = point.delta != null

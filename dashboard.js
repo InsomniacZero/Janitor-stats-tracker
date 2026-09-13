@@ -397,7 +397,7 @@ function renderCards() {
     const isRatio = seriesInfo.isRatio || seriesInfo.key === "chatMsgRatio";
 
     const valueDisplay = isRatio && Number.isFinite(value)
-      ? `${value.toFixed(2)} msgs/chat`
+      ? value.toFixed(2)
       : formatNumber(value);
 
     let growth;

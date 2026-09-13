@@ -175,7 +175,7 @@ function render() {
     const delta = stats?.delta;
     const isRatio = s.isRatio || s.key === "chatMsgRatio";
     const valueDisplay = isRatio && Number.isFinite(value)
-      ? `${value.toFixed(2)} msgs/chat`
+      ? value.toFixed(2)
       : formatCompact(value);
     const changeText = stats && snapshots.length >= 2
       ? (isRatio
