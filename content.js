@@ -4,6 +4,7 @@ const OPTIONAL_STATS = ["publishedChats"];
 // Cache of exact stats received from the MAIN world (injected_main.js)
 const mainWorldStatsCache = new Map();
 const pendingMainWorldRequests = new Map(); // requestId -> resolve(stats)
+const lastFeedSnapshotLogs = new Map(); // charId -> { timestamp, chats, msgs }
 
 window.addEventListener("message", (e) => {
   if (e.source !== window || !e.data || e.data.source !== "JSTATS_MAIN") return;
@@ -13,6 +14,7 @@ window.addEventListener("message", (e) => {
     const charId = cleanUuid(e.data.characterId || stats?.characterId);
     if (charId && stats) {
       mainWorldStatsCache.set(charId, stats);
+      checkAndAutoSaveTrackedFeedCharacters([stats]);
     }
     if (e.data.requestId && pendingMainWorldRequests.has(e.data.requestId)) {
       const resolve = pendingMainWorldRequests.get(e.data.requestId);
@@ -20,7 +22,83 @@ window.addEventListener("message", (e) => {
       resolve(stats);
     }
   }
+
+  if (e.data.type === "EXACT_STATS_CAPTURED_BATCH" || e.data.type === "FEED_CARDS_RESPONSE") {
+    const characters = e.data.characters || [];
+    for (const c of characters) {
+      const cid = cleanUuid(c.characterId);
+      if (cid) {
+        mainWorldStatsCache.set(cid, c);
+      }
+    }
+    checkAndAutoSaveTrackedFeedCharacters(characters);
+    if (e.data.requestId && pendingMainWorldRequests.has(e.data.requestId)) {
+      const resolve = pendingMainWorldRequests.get(e.data.requestId);
+      pendingMainWorldRequests.delete(e.data.requestId);
+      resolve(characters);
+    }
+  }
 });
+
+/**
+ * Automatically checks incoming feed characters against active tracked jobs
+ * and saves live snapshots to Supabase & IndexedDB without requiring manual navigation.
+ */
+async function checkAndAutoSaveTrackedFeedCharacters(characters) {
+  if (!characters || !characters.length) return;
+  try {
+    const localStore = await chrome.storage.local.get("trackedJobs");
+    const trackedJobs = localStore.trackedJobs || {};
+    const now = Date.now();
+
+    for (const char of characters) {
+      const cleanId = cleanUuid(char.characterId);
+      if (!cleanId) continue;
+      const job = trackedJobs[cleanId];
+      if (!job || job.status !== "active") continue;
+
+      // Throttle: skip duplicate snapshot if exact numbers logged within last 45s
+      const lastLog = lastFeedSnapshotLogs.get(cleanId);
+      const isSameNumbers = lastLog && lastLog.chats === char.chats && lastLog.msgs === char.msgs;
+      const isRecent = lastLog && (now - lastLog.timestamp < 45000);
+
+      if (isSameNumbers && isRecent) continue;
+
+      lastFeedSnapshotLogs.set(cleanId, {
+        timestamp: now,
+        chats: char.chats,
+        msgs: char.msgs
+      });
+
+      const snapshotPayload = {
+        characterId: cleanId,
+        characterName: char.characterName || job.character_name || "JanitorAI Character",
+        url: job.url || char.url || `https://janitorai.com/characters/${cleanId}`,
+        msgs: char.msgs,
+        msgsDisplay: char.msgsDisplay || char.msgs.toLocaleString(),
+        chats: char.chats,
+        chatsDisplay: char.chatsDisplay || char.chats.toLocaleString(),
+        comments: char.comments ?? null,
+        commentsDisplay: char.commentsDisplay ?? null,
+        favourites: char.favourites ?? null,
+        favouritesDisplay: char.favouritesDisplay ?? null,
+        isExact: true,
+        timestamp: new Date().toISOString()
+      };
+
+      chrome.runtime.sendMessage({
+        type: "SAVE_SNAPSHOT",
+        payload: snapshotPayload
+      }).then(res => {
+        if (res?.ok) {
+          console.info(`[JStats] Automatically logged live Following tab stats for ${snapshotPayload.characterName}:`, char);
+        }
+      }).catch(() => {});
+    }
+  } catch (err) {
+    console.debug("JStats: error in checkAndAutoSaveTrackedFeedCharacters", err);
+  }
+}
 
 function cleanUuid(val) {
   if (!val) return null;
@@ -553,31 +631,127 @@ async function collectWhenReady({ attempts = 16, delayMs = 850 } = {}) {
   return { ok: false, reason: "STATS_NOT_READY" };
 }
 
+/**
+ * Ask the main world script (injected_main.js) for all feed cards.
+ */
+async function requestFeedCardsFromMainWorld(timeoutMs = 1600) {
+  const requestId = "req_feed_" + Math.random().toString(36).slice(2, 9);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingMainWorldRequests.delete(requestId);
+      resolve([]);
+    }, timeoutMs);
+
+    pendingMainWorldRequests.set(requestId, (cards) => {
+      clearTimeout(timer);
+      resolve(cards || []);
+    });
+
+    window.postMessage(
+      {
+        source: "JSTATS_CONTENT",
+        type: "REQUEST_FEED_CARDS",
+        requestId
+      },
+      "*"
+    );
+  });
+}
+
 let collectionStarted = false;
 let lastKnownUrl = location.href;
 
 function scheduleCollection() {
-  if (collectionStarted) return;
-  collectionStarted = true;
-  collectWhenReady().catch(console.error);
+  // If on a character page, collect character page stats
+  if (/\/characters\//i.test(location.pathname)) {
+    if (collectionStarted) return;
+    collectionStarted = true;
+    collectWhenReady().catch(console.error);
+    return;
+  }
+
+  // If on Following feed or home feed, initiate feed card scanning
+  requestFeedCardsFromMainWorld().catch(() => {});
 }
 
 scheduleCollection();
 
+// Periodic feed scanner (every 7s) for live Following feed tabs
+setInterval(() => {
+  if (location.search.includes("following") || document.querySelector('a[href*="/characters/"]')) {
+    requestFeedCardsFromMainWorld().catch(() => {});
+  }
+}, 7000);
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== "COLLECT_STATS") return false;
-  collectWhenReady({ attempts: 12, delayMs: 750 })
-    .then(sendResponse)
-    .catch(error => sendResponse({ ok: false, error: error.message }));
-  return true;
+  if (message?.type === "COLLECT_STATS") {
+    // If on character page, run standard collection
+    if (/\/characters\//i.test(location.pathname)) {
+      collectWhenReady({ attempts: 12, delayMs: 750 })
+        .then(sendResponse)
+        .catch(error => sendResponse({ ok: false, error: error.message }));
+      return true;
+    }
+
+    // If on Following feed tab, scan cards and return tracked bot stats if present
+    (async () => {
+      const cards = await requestFeedCardsFromMainWorld();
+      if (cards.length > 0) {
+        return { ok: true, cardsCount: cards.length, snapshot: cards[0] };
+      }
+      return { ok: false, reason: "NO_CARDS_ON_FEED" };
+    })()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  if (message?.type === "GET_FEED_CHARACTER_STATS") {
+    const targetId = cleanUuid(message.characterId);
+    (async () => {
+      if (!targetId) return { ok: false, reason: "NO_CHARACTER_ID" };
+
+      // 1. Check mainWorldStatsCache
+      if (mainWorldStatsCache.has(targetId)) {
+        const cached = mainWorldStatsCache.get(targetId);
+        if (cached && cached.isExact) {
+          return { ok: true, snapshot: cached };
+        }
+      }
+
+      // 2. Scan feed cards via main world
+      const cards = await requestFeedCardsFromMainWorld();
+      const match = cards.find(c => cleanUuid(c.characterId) === targetId);
+      if (match && match.isExact) {
+        return { ok: true, snapshot: match };
+      }
+
+      // 3. If on this character's page, try extractStats()
+      if (getCharacterId() === targetId) {
+        const stats = await extractStats();
+        if (stats && stats.isExact) {
+          return { ok: true, snapshot: stats };
+        }
+      }
+
+      return { ok: false, reason: "NOT_FOUND_IN_FEED" };
+    })()
+      .then(sendResponse)
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  return false;
 });
 
-// JanitorAI is a SPA. Catch character-to-character navigation without a full reload.
+// JanitorAI is a SPA. Catch character-to-character or feed-to-character navigation without full reload.
 setInterval(() => {
   if (location.href === lastKnownUrl) return;
   lastKnownUrl = location.href;
   if (/\/characters\//i.test(location.pathname)) {
     collectionStarted = false;
     scheduleCollection();
+  } else if (location.search.includes("following")) {
+    requestFeedCardsFromMainWorld().catch(() => {});
   }
 }, 1500);

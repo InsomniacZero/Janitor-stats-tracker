@@ -78,27 +78,30 @@ chrome.runtime.onStartup.addListener(() => {
 const pendingTabScrapes = new Map();
 
 /**
- * Fallback: Opens a silent, inactive tab to allow content.js to extract DOM stats
+ * Fallback: Opens a silent, inactive tab to allow content.js to extract DOM/feed stats
  * with full Cloudflare clearance, then closes the tab automatically.
  */
-export async function scrapeViaBackgroundTab(characterId, jobMetadata = null) {
+export async function scrapeViaBackgroundTab(characterId, jobMetadata = null, customUrl = null) {
   if (typeof chrome === "undefined" || !chrome.tabs) return null;
 
-  const targetUrl = jobMetadata?.url || `https://janitorai.com/characters/${characterId}`;
+  const targetUrl = customUrl || jobMetadata?.url || `https://janitorai.com/characters/${characterId}`;
+  const isFollowingFeed = targetUrl.includes("following");
 
-  // 1. Check if an active tab already exists for this character
+  // 1. Check if an active tab already exists for this character or following feed
   try {
-    const existingTabs = await chrome.tabs.query({
-      url: [
-        `*://janitorai.com/characters/${characterId}*`,
-        `*://www.janitorai.com/characters/${characterId}*`
-      ]
-    });
+    const queryUrls = isFollowingFeed
+      ? ["*://janitorai.com/?segment=following*", "*://www.janitorai.com/?segment=following*"]
+      : [`*://janitorai.com/characters/${characterId}*`, `*://www.janitorai.com/characters/${characterId}*`];
+
+    const existingTabs = await chrome.tabs.query({ url: queryUrls });
 
     if (existingTabs.length > 0 && existingTabs[0].id) {
       const tabId = existingTabs[0].id;
       try {
-        const res = await chrome.tabs.sendMessage(tabId, { type: "COLLECT_STATS" });
+        const res = await chrome.tabs.sendMessage(tabId, {
+          type: "GET_FEED_CHARACTER_STATS",
+          characterId
+        });
         if (res?.ok && res?.snapshot) return res.snapshot;
       } catch {}
       await chrome.tabs.reload(tabId, { bypassCache: false }).catch(() => {});
@@ -120,11 +123,13 @@ export async function scrapeViaBackgroundTab(characterId, jobMetadata = null) {
       }
     };
 
+    const timeoutDuration = isFollowingFeed ? 12000 : 18000;
+
     timeoutId = setTimeout(() => {
-      console.warn(`JStats: background tab scrape timed out for ${characterId}`);
+      console.warn(`JStats: background tab scrape timed out for ${characterId} on ${targetUrl}`);
       cleanup();
       resolve(null);
-    }, 18000);
+    }, timeoutDuration);
 
     pendingTabScrapes.set(characterId, (snapshot) => {
       cleanup();
@@ -243,10 +248,216 @@ export async function getJanitorToken() {
  * 1. Tries internal API endpoint with user session token via extension privileges.
  * 2. Falls back to silent inactive tab DOM extraction if API is protected or 401/403.
  */
+/**
+ * Validates, normalizes, and saves a scraped character payload to local IndexedDB,
+ * Supabase character_snapshots, and updates tracked_jobs.
+ */
+export async function processAndSaveScrapedCharacter(cleanId, raw, jobMetadata = null) {
+  if (!raw || typeof raw !== "object") return null;
+
+  const charName = raw.name || raw.character_name || jobMetadata?.character_name || "JanitorAI Character";
+  const msgsRaw =
+    raw.total_message ??
+    raw.total_messages ??
+    raw.totalMessages ??
+    raw.totalMessage ??
+    raw.stats?.message ??
+    raw.stats?.messages ??
+    raw.stats?.msgs ??
+    raw.stats?.total_message ??
+    raw.message;
+
+  const chatsRaw =
+    raw.total_chat ??
+    raw.total_chats ??
+    raw.totalChats ??
+    raw.totalChat ??
+    raw.stats?.chat ??
+    raw.stats?.chats ??
+    raw.stats?.total_chat ??
+    raw.chat ??
+    raw.chats ??
+    raw.chat_count;
+
+  const favsRaw =
+    raw.total_favorite ??
+    raw.total_favorites ??
+    raw.total_favourite ??
+    raw.total_favourites ??
+    raw.stats?.favorite ??
+    raw.stats?.favourite ??
+    raw.stats?.favorites ??
+    raw.stats?.favourites ??
+    raw.favourites ??
+    raw.favorites ??
+    raw.favorite;
+
+  const commsRaw =
+    raw.total_comment ??
+    raw.total_comments ??
+    raw.stats?.comment ??
+    raw.stats?.comments ??
+    raw.comments ??
+    raw.comment;
+
+  const msgs = Number(msgsRaw);
+  const chats = Number(chatsRaw);
+  const favourites = Number(favsRaw);
+  const comments = Number(commsRaw);
+
+  if (!Number.isFinite(msgs) || !Number.isFinite(chats) || (msgs === 0 && chats === 0)) {
+    return null;
+  }
+
+  const pubVal = raw.stats?.publishedChats ?? raw.stats?.published_chats ?? raw.publishedChats ?? raw.published_chats;
+  const publishedChats = pubVal != null ? Number(pubVal) : null;
+
+  const charMetadata = {
+    characterId: cleanId,
+    characterName: charName,
+    url: jobMetadata?.url || `https://janitorai.com/characters/${cleanId}`,
+    avatar: raw.avatar || null,
+    createdAt: raw.created_at || raw.createdAt || jobMetadata?.createdAt || null,
+    updatedAt: raw.updated_at || raw.updatedAt || new Date().toISOString(),
+    publishedAt: raw.published_at || raw.publishedAt || jobMetadata?.publishedAt || null,
+    publishedChats
+  };
+
+  const snapshot = {
+    timestamp: new Date().toISOString(),
+    characterId: cleanId,
+    msgs,
+    msgsDisplay: msgs.toLocaleString(),
+    chats,
+    chatsDisplay: chats.toLocaleString(),
+    comments: Number.isFinite(comments) && comments >= 0 ? comments : 0,
+    commentsDisplay: (Number.isFinite(comments) && comments >= 0 ? comments : 0).toLocaleString(),
+    favourites: Number.isFinite(favourites) && favourites >= 0 ? favourites : 0,
+    favouritesDisplay: (Number.isFinite(favourites) && favourites >= 0 ? favourites : 0).toLocaleString(),
+    publishedChats,
+    publishedChatsDisplay: publishedChats != null ? publishedChats.toLocaleString() : null
+  };
+
+  // 1. Save to local IndexedDB
+  await saveCharacterSnapshot(charMetadata, snapshot);
+
+  // 2. Save to Supabase (if configured)
+  await insertSnapshot(cleanId, snapshot);
+
+  // 3. Update last_scraped_at in Supabase job
+  if (jobMetadata) {
+    await saveTrackedJob({
+      ...jobMetadata,
+      character_name: charName,
+      last_scraped_at: snapshot.timestamp
+    });
+  }
+
+  console.info(`JStats: Successfully saved snapshot for ${charName} (${cleanId})`, snapshot);
+  return snapshot;
+}
+
+/**
+ * Autonomously scrapes bot stats with prioritization for the Following feed:
+ * 1. Queries open JanitorAI tabs (user's open Following tab has ultra-fresh real-time stats).
+ * 2. Fetches Following feed internal API endpoints directly.
+ * 3. Opens a silent background tab to https://janitorai.com/?segment=following.
+ * 4. Falls back to direct bot endpoint (/hampter/characters/{id}) if bot is not in Following.
+ * 5. Falls back to direct bot background tab.
+ */
 export async function scrapeCharacterById(characterId, jobMetadata = null) {
-  const cleanId = characterIdFromUrl(characterId) || characterId;
+  const cleanId = characterIdFromUrl(characterId) || cleanUuid(characterId);
   if (!cleanId) return null;
 
+  // TIER 1: Check Open JanitorAI Tabs (e.g. user currently on Following tab)
+  try {
+    const openTabs = await chrome.tabs.query({
+      url: ["*://janitorai.com/*", "*://www.janitorai.com/*"]
+    });
+
+    // Prioritize tabs with 'following' in URL
+    openTabs.sort((a, b) => {
+      const aF = a.url && a.url.includes("following") ? 1 : 0;
+      const bF = b.url && b.url.includes("following") ? 1 : 0;
+      return bF - aF;
+    });
+
+    for (const tab of openTabs) {
+      if (!tab.id) continue;
+      try {
+        const res = await chrome.tabs.sendMessage(tab.id, {
+          type: "GET_FEED_CHARACTER_STATS",
+          characterId: cleanId
+        });
+        if (res?.ok && res?.snapshot) {
+          const snap = res.snapshot;
+          const processed = await processAndSaveScrapedCharacter(cleanId, snap, jobMetadata);
+          if (processed) {
+            console.info(`JStats: Scraped ${cleanId} live from open user tab (${tab.url})`, processed);
+            return processed;
+          }
+        }
+      } catch {}
+    }
+  } catch (err) {
+    console.debug("JStats: error querying open tabs for feed stats", err);
+  }
+
+  // TIER 2: Direct Following Feed API Fetch (updates faster than direct character endpoint)
+  try {
+    const token = await getJanitorToken();
+    const headers = {
+      Accept: "application/json, text/plain, */*",
+      Referer: "https://janitorai.com/?segment=following"
+    };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const followingEndpoints = [
+      "https://janitorai.com/hampter/characters?segment=following",
+      "https://janitorai.com/hampter/following/characters",
+      "https://janitorai.com/hampter/characters?mode=following"
+    ];
+
+    for (const ep of followingEndpoints) {
+      try {
+        const feedRes = await fetch(ep, { credentials: "include", headers });
+        if (feedRes.ok) {
+          const feedJson = await feedRes.json();
+          const items = feedJson.data || feedJson.characters || (Array.isArray(feedJson) ? feedJson : []);
+          if (Array.isArray(items) && items.length > 0) {
+            const match = items.find(it => cleanUuid(it.id || it.character_id || it.uuid) === cleanId);
+            if (match) {
+              const snapshot = await processAndSaveScrapedCharacter(cleanId, match, jobMetadata);
+              if (snapshot) {
+                console.info(`JStats: Scraped fresh Following feed API for ${cleanId}`, snapshot);
+                return snapshot;
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+  } catch (err) {
+    console.debug("JStats: error fetching following feed API", err);
+  }
+
+  // TIER 3: Silent Background Tab targeting https://janitorai.com/?segment=following
+  try {
+    const followingTabSnapshot = await scrapeViaBackgroundTab(
+      cleanId,
+      jobMetadata,
+      "https://janitorai.com/?segment=following"
+    );
+    if (followingTabSnapshot) {
+      console.info(`JStats: Scraped ${cleanId} from background Following tab`, followingTabSnapshot);
+      return followingTabSnapshot;
+    }
+  } catch (err) {
+    console.debug("JStats: error with background Following tab", err);
+  }
+
+  // TIER 4: Fallback to direct bot endpoint (/hampter/characters/{id})
+  // (In case the character is not present in the user's Following feed)
   try {
     const endpoint = `https://janitorai.com/hampter/characters/${cleanId}`;
     const token = await getJanitorToken();
@@ -254,131 +465,28 @@ export async function scrapeCharacterById(characterId, jobMetadata = null) {
       Accept: "application/json, text/plain, */*",
       Referer: "https://janitorai.com/"
     };
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
+    if (token) headers["Authorization"] = `Bearer ${token}`;
 
     const res = await fetch(endpoint, {
       credentials: "include",
       headers
     });
 
-    if (!res.ok) {
-      console.warn(`JStats: direct fetch returned HTTP ${res.status} for character ${cleanId}; falling back to silent background tab`);
-      return await scrapeViaBackgroundTab(cleanId, jobMetadata);
+    if (res.ok) {
+      const json = await res.json();
+      const raw = json.data?.character || json.data || json.character || json;
+      if (raw) {
+        const snapshot = await processAndSaveScrapedCharacter(cleanId, raw, jobMetadata);
+        if (snapshot) return snapshot;
+      }
     }
-
-    const json = await res.json();
-    const raw = json.data?.character || json.data || json.character || json;
-    if (!raw) {
-      return await scrapeViaBackgroundTab(cleanId, jobMetadata);
-    }
-
-    const charName = raw.name || raw.character_name || jobMetadata?.character_name || "JanitorAI Character";
-    const msgsRaw =
-      raw.total_message ??
-      raw.total_messages ??
-      raw.totalMessages ??
-      raw.totalMessage ??
-      raw.stats?.message ??
-      raw.stats?.messages ??
-      raw.stats?.msgs ??
-      raw.stats?.total_message ??
-      raw.message;
-
-    const chatsRaw =
-      raw.total_chat ??
-      raw.total_chats ??
-      raw.totalChats ??
-      raw.totalChat ??
-      raw.stats?.chat ??
-      raw.stats?.chats ??
-      raw.stats?.total_chat ??
-      raw.chat ??
-      raw.chats ??
-      raw.chat_count;
-
-    const favsRaw =
-      raw.total_favorite ??
-      raw.total_favorites ??
-      raw.total_favourite ??
-      raw.total_favourites ??
-      raw.stats?.favorite ??
-      raw.stats?.favourite ??
-      raw.stats?.favorites ??
-      raw.stats?.favourites ??
-      raw.favourites ??
-      raw.favorites ??
-      raw.favorite;
-
-    const commsRaw =
-      raw.total_comment ??
-      raw.total_comments ??
-      raw.stats?.comment ??
-      raw.stats?.comments ??
-      raw.comments ??
-      raw.comment;
-
-    const msgs = Number(msgsRaw);
-    const chats = Number(chatsRaw);
-    const favourites = Number(favsRaw);
-    const comments = Number(commsRaw);
-
-    if (!Number.isFinite(msgs) || !Number.isFinite(chats) || (msgs === 0 && chats === 0)) {
-      console.warn(`JStats: Direct API response for ${cleanId} did not contain valid numeric stats; falling back to background tab`, raw);
-      return await scrapeViaBackgroundTab(cleanId, jobMetadata);
-    }
-
-    const pubVal = raw.stats?.publishedChats ?? raw.stats?.published_chats ?? raw.publishedChats ?? raw.published_chats;
-    const publishedChats = pubVal != null ? Number(pubVal) : null;
-
-    const charMetadata = {
-      characterId: cleanId,
-      characterName: charName,
-      url: jobMetadata?.url || `https://janitorai.com/characters/${cleanId}`,
-      avatar: raw.avatar || null,
-      createdAt: raw.created_at || raw.createdAt || jobMetadata?.createdAt || null,
-      updatedAt: raw.updated_at || raw.updatedAt || new Date().toISOString(),
-      publishedAt: raw.published_at || raw.publishedAt || jobMetadata?.publishedAt || null,
-      publishedChats
-    };
-
-    const snapshot = {
-      timestamp: new Date().toISOString(),
-      characterId: cleanId,
-      msgs,
-      msgsDisplay: msgs.toLocaleString(),
-      chats,
-      chatsDisplay: chats.toLocaleString(),
-      comments: Number.isFinite(comments) && comments >= 0 ? comments : 0,
-      commentsDisplay: (Number.isFinite(comments) && comments >= 0 ? comments : 0).toLocaleString(),
-      favourites: Number.isFinite(favourites) && favourites >= 0 ? favourites : 0,
-      favouritesDisplay: (Number.isFinite(favourites) && favourites >= 0 ? favourites : 0).toLocaleString(),
-      publishedChats,
-      publishedChatsDisplay: publishedChats != null ? publishedChats.toLocaleString() : null
-    };
-
-    // 1. Save to local IndexedDB
-    await saveCharacterSnapshot(charMetadata, snapshot);
-
-    // 2. Save to Supabase (if configured)
-    await insertSnapshot(cleanId, snapshot);
-
-    // 3. Update last_scraped_at in Supabase job
-    if (jobMetadata) {
-      await saveTrackedJob({
-        ...jobMetadata,
-        character_name: charName,
-        last_scraped_at: snapshot.timestamp
-      });
-    }
-
-    console.debug(`JStats: Successfully scraped 1m snapshot for ${charName} (${cleanId})`, snapshot);
-    return snapshot;
   } catch (err) {
-    console.warn(`JStats: direct fetch error for ${cleanId}; falling back to silent background tab`, err);
-    return await scrapeViaBackgroundTab(cleanId, jobMetadata);
+    console.warn(`JStats: direct endpoint error for ${cleanId}`, err);
   }
+
+  // TIER 5: Fallback to direct character background tab
+  const directUrl = jobMetadata?.url || `https://janitorai.com/characters/${cleanId}`;
+  return await scrapeViaBackgroundTab(cleanId, jobMetadata, directUrl);
 }
 
 /**
@@ -441,18 +549,25 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       await scrapeCharacterById(charId, job);
     }
 
-    // 5. Also reload any open JanitorAI character tabs to keep session fresh
-    const tabs = await chrome.tabs.query({
-      url: [
-        "https://janitorai.com/characters/*",
-        "https://www.janitorai.com/characters/*"
-      ]
+    // 5. Also refresh and trigger collection on any open JanitorAI Following tabs or character tabs
+    const allJanitorTabs = await chrome.tabs.query({
+      url: ["*://janitorai.com/*", "*://www.janitorai.com/*"]
     });
 
     const chosenTabs = new Map();
     const activeIds = new Set(activeJobs.map(j => j.character_id || j.characterId));
-    for (const tab of tabs) {
+
+    for (const tab of allJanitorTabs) {
       if (!tab.id || !tab.url) continue;
+
+      // If user has a Following feed tab open, trigger fresh card scan
+      if (tab.url.includes("following")) {
+        try {
+          chrome.tabs.sendMessage(tab.id, { type: "COLLECT_STATS" }).catch(() => {});
+        } catch {}
+        continue;
+      }
+
       const characterId = characterIdFromUrl(tab.url);
       if (!characterId || !activeIds.has(characterId)) continue;
       if (!chosenTabs.has(characterId)) chosenTabs.set(characterId, tab);

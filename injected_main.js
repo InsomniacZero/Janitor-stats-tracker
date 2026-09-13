@@ -73,8 +73,21 @@
     return null;
   }
 
-  function inspectStatsPayload(obj, depth = 0) {
-    if (!obj || typeof obj !== "object" || depth > 4) return null;
+  /**
+   * Recursively extracts all character data objects from any payload (arrays, feeds, nested objects).
+   * Returns an array of character objects with exact unrounded single-digit counts.
+   */
+  function extractAllCharacters(obj, depth = 0, results = [], seen = new Set()) {
+    if (!obj || depth > 6) return results;
+
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        extractAllCharacters(item, depth + 1, results, seen);
+      }
+      return results;
+    }
+
+    if (typeof obj !== "object") return results;
 
     const msgsRaw =
       obj.total_message ??
@@ -130,32 +143,81 @@
     const hasMsgs = Number.isFinite(msgs) && msgs >= 0;
     const hasChats = Number.isFinite(chats) && chats >= 0;
 
-    if (hasMsgs && hasChats && (msgs > 0 || chats > 0)) {
-      const charId = cleanUuid(obj.id || obj.character_id || obj.uuid || obj.characterId);
-      return {
+    const rawId = obj.id || obj.character_id || obj.uuid || obj.characterId || obj.bot_id;
+    const charId = cleanUuid(rawId);
+
+    if (charId && hasMsgs && hasChats && (msgs > 0 || chats > 0) && !seen.has(charId)) {
+      seen.add(charId);
+      results.push({
         characterId: charId,
         msgs,
+        msgsDisplay: msgs.toLocaleString(),
         chats,
+        chatsDisplay: chats.toLocaleString(),
         favourites: Number.isFinite(favourites) && favourites >= 0 ? favourites : null,
+        favouritesDisplay: Number.isFinite(favourites) && favourites >= 0 ? favourites.toLocaleString() : null,
         comments: Number.isFinite(comments) && comments >= 0 ? comments : null,
+        commentsDisplay: Number.isFinite(comments) && comments >= 0 ? comments.toLocaleString() : null,
         characterName: obj.name || obj.character_name || null,
+        avatar: obj.avatar || null,
+        createdAt: obj.created_at || obj.createdAt || null,
+        updatedAt: obj.updated_at || obj.updatedAt || null,
+        publishedAt: obj.published_at || obj.publishedAt || null,
         isExact: true
-      };
+      });
     }
 
-    if (obj.character) {
-      const sub = inspectStatsPayload(obj.character, depth + 1);
-      if (sub) return sub;
-    }
-    if (obj.data) {
-      const sub = inspectStatsPayload(obj.data, depth + 1);
-      if (sub) return sub;
+    // Traverse child properties (data, characters, results, items, etc.)
+    for (const k of Object.keys(obj)) {
+      if (typeof obj[k] === "object" && obj[k] !== null && k !== "stats") {
+        extractAllCharacters(obj[k], depth + 1, results, seen);
+      }
     }
 
-    return null;
+    return results;
   }
 
-  // 1. Monkey-patch window.fetch to intercept API payloads
+  function inspectStatsPayload(obj) {
+    const chars = extractAllCharacters(obj);
+    return chars.length > 0 ? chars[0] : null;
+  }
+
+  function cacheAndBroadcastCharacters(characters, originUrl = "") {
+    if (!characters || !characters.length) return;
+
+    for (const c of characters) {
+      if (c.characterId) {
+        exactStatsCache.set(c.characterId, c);
+      }
+    }
+
+    window.postMessage(
+      {
+        source: "JSTATS_MAIN",
+        type: "EXACT_STATS_CAPTURED_BATCH",
+        characters,
+        originUrl
+      },
+      "*"
+    );
+
+    // If single character or URL contains UUID, also send single message
+    const urlUuid = cleanUuid(originUrl);
+    const target = (urlUuid && characters.find(c => c.characterId === urlUuid)) || (characters.length === 1 ? characters[0] : null);
+    if (target) {
+      window.postMessage(
+        {
+          source: "JSTATS_MAIN",
+          type: "EXACT_STATS_CAPTURED",
+          characterId: target.characterId,
+          stats: target
+        },
+        "*"
+      );
+    }
+  }
+
+  // 1. Monkey-patch window.fetch to intercept raw API payloads (direct & feed)
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
     const response = await originalFetch.apply(this, args);
@@ -165,29 +227,18 @@
         inputUrl.includes("/characters") ||
         inputUrl.includes("/character-analytics") ||
         inputUrl.includes("/hampter/") ||
-        inputUrl.includes("kim.janitorai.com")
+        inputUrl.includes("following") ||
+        inputUrl.includes("/feed") ||
+        inputUrl.includes("kim.janitorai.com") ||
+        inputUrl.includes("/api/")
       ) {
         const clone = response.clone();
         clone
           .json()
           .then((payload) => {
-            const parsed = inspectStatsPayload(payload);
-            if (parsed) {
-              const urlUuid = cleanUuid(inputUrl);
-              const charId = parsed.characterId || urlUuid;
-              if (charId) {
-                parsed.characterId = charId;
-                exactStatsCache.set(charId, parsed);
-                window.postMessage(
-                  {
-                    source: "JSTATS_MAIN",
-                    type: "EXACT_STATS_CAPTURED",
-                    characterId: charId,
-                    stats: parsed
-                  },
-                  "*"
-                );
-              }
+            const found = extractAllCharacters(payload);
+            if (found.length > 0) {
+              cacheAndBroadcastCharacters(found, inputUrl);
             }
           })
           .catch(() => {});
@@ -196,7 +247,115 @@
     return response;
   };
 
-  // 2. Inspect React Fiber on the DOM
+  // 2. Monkey-patch XMLHttpRequest to intercept any XHR payloads
+  const originalOpen = XMLHttpRequest.prototype.open;
+  const originalSend = XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    this.__jstatsUrl = typeof url === "string" ? url : "";
+    return originalOpen.apply(this, [method, url, ...rest]);
+  };
+
+  XMLHttpRequest.prototype.send = function (...args) {
+    this.addEventListener("load", function () {
+      try {
+        const url = this.__jstatsUrl || "";
+        if (
+          url.includes("/characters") ||
+          url.includes("/hampter/") ||
+          url.includes("following") ||
+          url.includes("/feed")
+        ) {
+          let payload = null;
+          if (this.responseType === "json" && this.response) {
+            payload = this.response;
+          } else if (typeof this.responseText === "string" && this.responseText.trim().startsWith("{")) {
+            payload = JSON.parse(this.responseText);
+          }
+          if (payload) {
+            const found = extractAllCharacters(payload);
+            if (found.length > 0) {
+              cacheAndBroadcastCharacters(found, url);
+            }
+          }
+        }
+      } catch {}
+    });
+    return originalSend.apply(this, args);
+  };
+
+  // 3. Inspect React Fiber on the DOM for character cards (Following feed, trending, search)
+  function scanCardsInMainWorld() {
+    const found = [];
+    try {
+      const cardLinks = document.querySelectorAll('a[href*="/characters/"]');
+      for (const a of cardLinks) {
+        const href = a.getAttribute("href") || "";
+        const charId = cleanUuid(href);
+        if (!charId) continue;
+
+        let charStats = exactStatsCache.get(charId);
+        if (charStats) {
+          found.push(charStats);
+          continue;
+        }
+
+        // Check React Fiber on anchor and surrounding parent/child nodes
+        const elementsToTest = [
+          a,
+          a.parentElement,
+          a.parentElement?.parentElement,
+          a.parentElement?.parentElement?.parentElement,
+          a.firstElementChild
+        ].filter(Boolean);
+
+        for (const el of elementsToTest) {
+          const fiberKey = Object.keys(el).find((k) =>
+            k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$")
+          );
+          if (!fiberKey) continue;
+
+          let curr = el[fiberKey];
+          let depth = 0;
+          while (curr && depth < 25) {
+            if (curr.memoizedProps) {
+              const chars = extractAllCharacters(curr.memoizedProps);
+              const match = chars.find((c) => c.characterId === charId) || chars[0];
+              if (match) {
+                match.characterId = charId;
+                exactStatsCache.set(charId, match);
+                found.push(match);
+                break;
+              }
+            }
+            if (curr.memoizedState) {
+              const chars = extractAllCharacters(curr.memoizedState);
+              const match = chars.find((c) => c.characterId === charId) || chars[0];
+              if (match) {
+                match.characterId = charId;
+                exactStatsCache.set(charId, match);
+                found.push(match);
+                break;
+              }
+            }
+            curr = curr.return;
+            depth++;
+          }
+          if (exactStatsCache.has(charId)) break;
+        }
+      }
+    } catch (err) {
+      console.debug("JStats: error scanning cards in main world", err);
+    }
+
+    if (found.length > 0) {
+      cacheAndBroadcastCharacters(found, location.href);
+    }
+
+    return found;
+  }
+
+  // 4. Inspect React Fiber on the full DOM for single character view
   function inspectReactFiber() {
     try {
       const candidates = [
@@ -232,7 +391,7 @@
     return null;
   }
 
-  // 3. In-page active fetch using page cookies and authorization
+  // 5. In-page active fetch using page cookies and authorization
   async function inPageFetchExactStats(characterId) {
     const cleanId = cleanUuid(characterId);
     if (!cleanId) return null;
@@ -241,7 +400,24 @@
     const headers = { Accept: "application/json, text/plain, */*" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    // Try 1: /hampter/characters/${cleanId}
+    // Try 1: Following feed endpoint directly (/hampter/characters?segment=following)
+    try {
+      const res = await originalFetch(`/hampter/characters?segment=following`, {
+        credentials: "include",
+        headers
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const chars = extractAllCharacters(json);
+        if (chars.length > 0) {
+          cacheAndBroadcastCharacters(chars, "/hampter/characters?segment=following");
+          const match = chars.find((c) => c.characterId === cleanId);
+          if (match) return match;
+        }
+      }
+    } catch {}
+
+    // Try 2: /hampter/characters/${cleanId}
     try {
       const res = await originalFetch(`/hampter/characters/${cleanId}`, {
         credentials: "include",
@@ -258,7 +434,7 @@
       }
     } catch {}
 
-    // Try 2: /hampter/character-analytics/${cleanId}?timeRange=30d
+    // Try 3: /hampter/character-analytics/${cleanId}?timeRange=30d
     try {
       const res = await originalFetch(`/hampter/character-analytics/${cleanId}?timeRange=30d`, {
         credentials: "include",
@@ -280,7 +456,35 @@
     return null;
   }
 
-  // 4. Handle incoming requests from content.js
+  // 6. Active fetch of Following Feed in page context
+  async function inPageFetchFollowingFeed() {
+    const token = parseTokenFromCookieString(document.cookie);
+    const headers = { Accept: "application/json, text/plain, */*" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const endpoints = [
+      "/hampter/characters?segment=following",
+      "/hampter/following/characters",
+      "/hampter/characters?mode=following"
+    ];
+
+    for (const ep of endpoints) {
+      try {
+        const res = await originalFetch(ep, { credentials: "include", headers });
+        if (res.ok) {
+          const json = await res.json();
+          const chars = extractAllCharacters(json);
+          if (chars.length > 0) {
+            cacheAndBroadcastCharacters(chars, ep);
+            return chars;
+          }
+        }
+      } catch {}
+    }
+    return [];
+  }
+
+  // 7. Handle incoming requests from content.js
   window.addEventListener("message", async (e) => {
     if (e.source !== window || !e.data || e.data.source !== "JSTATS_CONTENT") return;
 
@@ -288,16 +492,22 @@
       const requestId = e.data.requestId;
       const charId = cleanUuid(e.data.characterId) || cleanUuid(location.pathname);
 
-      // Check cache first
+      // 1. Check cache first
       let stats = charId ? exactStatsCache.get(charId) : null;
 
-      // Check React Fiber
+      // 2. Check React Fiber cards on the page (e.g. Following tab cards)
+      if (!stats) {
+        scanCardsInMainWorld();
+        stats = charId ? exactStatsCache.get(charId) : null;
+      }
+
+      // 3. Check React Fiber full DOM (single character page)
       if (!stats) {
         stats = inspectReactFiber();
         if (stats && charId) stats.characterId = charId;
       }
 
-      // Check In-Page Fetch
+      // 4. In-page fetch
       if (!stats && charId) {
         stats = await inPageFetchExactStats(charId);
       }
@@ -313,7 +523,47 @@
         "*"
       );
     }
+
+    if (e.data.type === "REQUEST_FEED_CARDS") {
+      const cards = scanCardsInMainWorld();
+      if (!cards.length) {
+        await inPageFetchFollowingFeed();
+      }
+      window.postMessage(
+        {
+          source: "JSTATS_MAIN",
+          type: "FEED_CARDS_RESPONSE",
+          requestId: e.data.requestId,
+          characters: Array.from(exactStatsCache.values())
+        },
+        "*"
+      );
+    }
   });
 
-  console.info("JStats: Main World interceptor and React Fiber extractor active.");
+  // 8. Auto-scan DOM for cards on initial load, mutations, and periodic intervals
+  setTimeout(scanCardsInMainWorld, 750);
+  setTimeout(scanCardsInMainWorld, 2000);
+  setTimeout(scanCardsInMainWorld, 4500);
+
+  try {
+    let debounceTimer = null;
+    const observer = new MutationObserver(() => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(scanCardsInMainWorld, 350);
+    });
+    observer.observe(document.body || document.documentElement, {
+      childList: true,
+      subtree: true
+    });
+  } catch {}
+
+  // Periodic card scan (every 6s) if character cards are present
+  setInterval(() => {
+    if (document.querySelector('a[href*="/characters/"]')) {
+      scanCardsInMainWorld();
+    }
+  }, 6000);
+
+  console.info("JStats: Main World interceptor, Following feed extractor, and React Fiber card scanner active.");
 })();

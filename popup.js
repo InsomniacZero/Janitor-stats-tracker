@@ -176,19 +176,28 @@ async function load() {
 }
 
 document.getElementById("collectBtn").addEventListener("click", async () => {
-  const tabs = await chrome.tabs.query({active:true,currentWindow:true});
-  const tab=tabs[0];
-  if(!tab?.id || !/janitorai\.com\/characters\//i.test(tab.url||"")){
-    document.getElementById("notice").textContent="Open a JanitorAI character page in the active tab.";
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs[0];
+  if (!tab?.id || !/janitorai\.com/i.test(tab.url || "")) {
+    document.getElementById("notice").textContent = "Open a JanitorAI character page or Following tab in the active tab.";
     return;
   }
-  try{
-    const result=await chrome.tabs.sendMessage(tab.id,{type:"COLLECT_STATS"});
-    document.getElementById("notice").textContent=result?.ok?"Collected the current page.":"The page is still loading; try again in a moment.";
-    if(result?.snapshot?.characterId) await chrome.storage.local.set({activeCharacterId:result.snapshot.characterId});
+  try {
+    const isFollowing = (tab.url || "").includes("following");
+    const result = await chrome.tabs.sendMessage(tab.id, { type: "COLLECT_STATS" });
+    if (result?.ok) {
+      document.getElementById("notice").textContent = isFollowing
+        ? "Collected live bot stats from Following feed."
+        : "Collected the current page stats.";
+    } else {
+      document.getElementById("notice").textContent = "Page is still loading; try again in a moment.";
+    }
+    if (result?.snapshot?.characterId) {
+      await chrome.storage.local.set({ activeCharacterId: result.snapshot.characterId });
+    }
     await load();
-  }catch{
-    document.getElementById("notice").textContent="Could not collect. Reload the JanitorAI character page once.";
+  } catch {
+    document.getElementById("notice").textContent = "Could not collect. Reload the JanitorAI tab once.";
   }
 });
 
