@@ -573,161 +573,92 @@ function renderBotShowcase(character, latest) {
   const totalPubChats = latest?.publishedChats ?? character.publishedChats;
   const totalComments = latest?.comments;
 
-  // Comments management (Strictly Real Reviews Only - No fake comments)
-  const allComments = getCommentsForCharacter(character.characterId);
-  const visibleComments = allComments.slice(0, commentsVisibleLimit);
-  const hasMore = visibleComments.length < allComments.length;
-
-  const commentsListHtml = visibleComments.length > 0
-    ? visibleComments.map(c => {
-        const color = getAuthorColor(c.author);
-        const userInitials = (c.author.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2) || "U").toUpperCase();
-        return `
-          <div class="bot-comment-item">
-            <div class="bot-comment-header">
-              <div class="bot-comment-user">
-                <div class="bot-comment-avatar" style="background: ${color};">${escapeHtml(userInitials)}</div>
-                <div class="bot-comment-meta">
-                  <span class="bot-comment-author">@${escapeHtml(c.author)}</span>
-                  <span class="bot-comment-time">${escapeHtml(c.time || "")}</span>
-                </div>
-              </div>
-              <div class="bot-comment-likes">❤️ ${Number(c.likes || 0).toLocaleString()}</div>
-            </div>
-            <p class="bot-comment-text">${escapeHtml(c.text)}</p>
-          </div>
-        `;
-      }).join("")
-    : `
-      <div class="bot-comments-empty">
-        <div class="empty-comments-icon-wrap">
-          <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-        </div>
-        <div class="empty-comments-title">No reviews synced yet</div>
-        <p class="empty-comments-desc">Real community reviews sync automatically when you view this bot on JanitorAI with the extension active.</p>
-        <a href="${escapeHtml(botUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm empty-comments-action">
-          <span>View Reviews on JanitorAI</span>
-          <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
-        </a>
-      </div>
-    `;
-
   showcaseEl.innerHTML = `
-    <div class="bot-showcase-grid">
-      <!-- Left: Bot Profile & Shifted Lifetime Totals Card -->
-      <article class="bot-profile-card">
-        <div class="bot-profile-header">
-          <div class="bot-avatar-frame">
-            ${avatarUrl ? `
-              <img class="bot-avatar-img" src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(charName)}"
-                   onerror="this.style.display='none'; const fb = this.parentElement.querySelector('.bot-avatar-fallback'); if(fb) fb.style.display='flex';" />
-              <div class="bot-avatar-fallback" style="display: none;">${escapeHtml(initials)}</div>
-            ` : `
-              <div class="bot-avatar-fallback">${escapeHtml(initials)}</div>
-            `}
+    <article class="bot-profile-card">
+      <!-- Upper Area: Full Cover Image with Rich Cinematic Gradient & Text Overlay -->
+      <div class="bot-cover-hero">
+        ${avatarUrl ? `
+          <img class="bot-cover-img" src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(charName)}"
+               onerror="this.style.display='none'; const fb = this.parentElement.querySelector('.bot-cover-fallback'); if(fb) fb.style.display='flex';" />
+          <div class="bot-cover-fallback" style="display: none;">
+            <span class="bot-cover-watermark">${escapeHtml(initials)}</span>
           </div>
-          <div class="bot-profile-info">
-            <div class="bot-badge-row">
-              <span class="bot-status-tag">
-                <span class="bot-status-indicator"></span>
-                Active Tracked Bot
-              </span>
-            </div>
-            <h2 class="bot-name" title="${escapeHtml(charName)}">${escapeHtml(charName)}</h2>
-            <div class="bot-creator-line">
-              <span>
-                <svg class="bot-creator-icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                By <span class="bot-creator-text">${creatorName ? `@${escapeHtml(creatorName)}` : `<span class="bot-creator-unset">Unknown Creator</span>`}</span>
-              </span>
-              <button type="button" class="btn btn-ghost btn-xs bot-edit-details-btn" id="openEditBotModalBtn" title="Set bot avatar image and creator handle">
-                <svg viewBox="0 0 24 24" style="width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; margin-right: 3px;"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        ` : `
+          <div class="bot-cover-fallback">
+            <span class="bot-cover-watermark">${escapeHtml(initials)}</span>
+          </div>
+        `}
+        <div class="bot-cover-overlay"></div>
+        <div class="bot-cover-content">
+          <div class="bot-cover-top-row">
+            <span class="bot-status-tag">
+              <span class="bot-status-indicator"></span>
+              Active Tracked Bot
+            </span>
+            <div class="bot-cover-actions">
+              <button type="button" class="bot-action-btn" id="openEditBotModalBtn" title="Set bot avatar image and creator handle">
+                <svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
                 <span>Edit Info</span>
               </button>
-              <a href="${escapeHtml(botUrl)}" target="_blank" rel="noopener noreferrer" class="bot-open-link" title="Open character page on JanitorAI">
+              <a href="${escapeHtml(botUrl)}" target="_blank" rel="noopener noreferrer" class="bot-action-link" title="Open character page on JanitorAI">
                 <span>View on JanitorAI</span>
                 <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
               </a>
             </div>
           </div>
-        </div>
-
-        <!-- Shifted Lifetime Totals Grid -->
-        <div class="bot-totals-container">
-          <div class="bot-totals-heading">
-            <span>Current Lifetime Totals</span>
-            <span class="bot-totals-badge">All-time</span>
-          </div>
-          <div class="bot-totals-grid">
-            <div class="bot-total-item stat-messages">
-              <span class="bot-total-label">Messages</span>
-              <span class="bot-total-val" title="${formatNumber(totalMsgs)}">${formatNumber(totalMsgs)}</span>
-              <span class="bot-total-sub">Total messages</span>
-            </div>
-            <div class="bot-total-item stat-chats">
-              <span class="bot-total-label">Chats</span>
-              <span class="bot-total-val" title="${formatNumber(totalChats)}">${formatNumber(totalChats)}</span>
-              <span class="bot-total-sub">Total chats</span>
-            </div>
-            <div class="bot-total-item stat-favs">
-              <span class="bot-total-label">Favorites</span>
-              <span class="bot-total-val" title="${formatNumber(totalFavs)}">${formatNumber(totalFavs)}</span>
-              <span class="bot-total-sub">Total favorites</span>
-            </div>
-            <div class="bot-total-item stat-published">
-              <span class="bot-total-label">Published Chats</span>
-              <span class="bot-total-val" title="${formatNumber(totalPubChats)}">${formatNumber(totalPubChats)}</span>
-              <span class="bot-total-sub">Public chats</span>
-            </div>
-            <div class="bot-total-item stat-comments">
-              <span class="bot-total-label">Comments</span>
-              <span class="bot-total-val" title="${formatNumber(totalComments)}">${formatNumber(totalComments)}</span>
-              <span class="bot-total-sub">Community reviews</span>
+          <div class="bot-cover-bottom-row">
+            <div class="bot-cover-identity">
+              <h2 class="bot-name" title="${escapeHtml(charName)}">${escapeHtml(charName)}</h2>
+              <div class="bot-creator-line">
+                <svg class="bot-creator-icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                <span>By <span class="bot-creator-text">${creatorName ? `@${escapeHtml(creatorName)}` : `<span class="bot-creator-unset">Unknown Creator</span>`}</span></span>
+              </div>
             </div>
           </div>
         </div>
-      </article>
+      </div>
 
-      <!-- Right: Scrollable Comments Panel (Top 5 + Load More) -->
-      <article class="bot-comments-panel">
-        <div class="bot-comments-header">
-          <div class="bot-comments-title-wrap">
-            <svg class="bot-comments-icon" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-            <h3>Bot Comments & Reviews</h3>
+      <!-- Lower Area: Current Lifetime Totals Grid (Spans Full Width Below Cover) -->
+      <div class="bot-totals-container">
+        <div class="bot-totals-heading">
+          <span>Current Lifetime Totals</span>
+          <span class="bot-totals-badge">All-time</span>
+        </div>
+        <div class="bot-totals-grid">
+          <div class="bot-total-item stat-messages">
+            <span class="bot-total-label">Messages</span>
+            <span class="bot-total-val" title="${formatNumber(totalMsgs)}">${formatNumber(totalMsgs)}</span>
+            <span class="bot-total-sub">Total messages</span>
           </div>
-          <span class="bot-comments-badge">${allComments.length > 0 ? `${allComments.length.toLocaleString()} reviews` : (totalComments ? `${Number(totalComments).toLocaleString()} reviews on JanitorAI` : "0 reviews")}</span>
+          <div class="bot-total-item stat-chats">
+            <span class="bot-total-label">Chats</span>
+            <span class="bot-total-val" title="${formatNumber(totalChats)}">${formatNumber(totalChats)}</span>
+            <span class="bot-total-sub">Total chats</span>
+          </div>
+          <div class="bot-total-item stat-favs">
+            <span class="bot-total-label">Favorites</span>
+            <span class="bot-total-val" title="${formatNumber(totalFavs)}">${formatNumber(totalFavs)}</span>
+            <span class="bot-total-sub">Total favorites</span>
+          </div>
+          <div class="bot-total-item stat-published">
+            <span class="bot-total-label">Published Chats</span>
+            <span class="bot-total-val" title="${formatNumber(totalPubChats)}">${formatNumber(totalPubChats)}</span>
+            <span class="bot-total-sub">Public chats</span>
+          </div>
+          <div class="bot-total-item stat-comments">
+            <span class="bot-total-label">Comments</span>
+            <span class="bot-total-val" title="${formatNumber(totalComments)}">${formatNumber(totalComments)}</span>
+            <span class="bot-total-sub">Community reviews</span>
+          </div>
         </div>
-
-        <div class="bot-comments-list" id="botCommentsList">
-          ${commentsListHtml}
-        </div>
-
-        <div class="bot-comments-footer ${!hasMore ? 'all-loaded' : ''}">
-          <span class="bot-comments-count-info">
-            ${allComments.length === 0 ? "No fake comments • Real synced reviews only" : (hasMore ? `Showing top ${visibleComments.length} of ${allComments.length} comments` : `All ${allComments.length} comments displayed`)}
-          </span>
-          ${hasMore ? `
-            <button type="button" class="btn btn-secondary btn-sm" id="loadMoreCommentsBtn">
-              <svg viewBox="0 0 24 24" style="width: 13px; height: 13px; margin-right: 4px; stroke: currentColor; fill: none; stroke-width: 2;"><path d="M12 5v14M5 12h14"/></svg>
-              Load more (+5)
-            </button>
-          ` : ""}
-        </div>
-      </article>
-    </div>
+      </div>
+    </article>
   `;
 
   const editBtn = showcaseEl.querySelector("#openEditBotModalBtn");
   if (editBtn) {
     editBtn.addEventListener("click", () => {
       openEditBotModal(character);
-    });
-  }
-
-  const loadMoreBtn = showcaseEl.querySelector("#loadMoreCommentsBtn");
-  if (loadMoreBtn) {
-    loadMoreBtn.addEventListener("click", () => {
-      commentsVisibleLimit += 5;
-      renderBotShowcase(character, latest);
     });
   }
 }
