@@ -43,6 +43,9 @@ import {
   fetchTrackedJobs,
   saveTrackedJob,
   deleteTrackedJob,
+  fetchWatchedCreatorsFromSupabase,
+  addWatchedCreatorToSupabase,
+  removeWatchedCreatorFromSupabase,
   insertSnapshot,
   fetchCharacterSnapshots,
   subscribeToRealtimeSnapshots,
@@ -1826,22 +1829,40 @@ function setupEventListeners() {
 // Watched Creators (Minute-0 Auto-Tracker)
 // ==========================================
 async function getWatchedCreatorsConfig() {
+  let list = [];
+  let autoFollowed = false;
+
   if (isExtension && chrome?.runtime?.sendMessage) {
     try {
       const res = await chrome.runtime.sendMessage({ type: "GET_WATCHED_CREATORS" });
-      if (res?.ok) {
-        return {
-          watchedCreators: res.watchedCreators || [],
-          autoTrackAllFollowed: Boolean(res.autoTrackAllFollowed)
-        };
+      if (res?.ok && Array.isArray(res.watchedCreators)) {
+        list = res.watchedCreators;
+        autoFollowed = Boolean(res.autoTrackAllFollowed);
       }
     } catch {}
   }
 
+  // Also query Supabase directly (enables standalone web mode without extension)
+  const sbList = await fetchWatchedCreatorsFromSupabase();
   const stored = await storage.get({ watchedCreators: [], autoTrackAllFollowed: false });
+  const localList = Array.isArray(stored.watchedCreators) ? stored.watchedCreators : [];
+
+  const merged = new Map();
+  for (const item of sbList) {
+    const clean = cleanCreatorHandle(item.creatorHandle);
+    if (clean) merged.set(clean, item);
+  }
+  for (const item of [...list, ...localList]) {
+    const handle = typeof item === "string" ? item : item?.creatorHandle;
+    const clean = cleanCreatorHandle(handle);
+    if (clean && !merged.has(clean)) {
+      merged.set(clean, typeof item === "string" ? { creatorHandle: clean, addedAt: new Date().toISOString() } : item);
+    }
+  }
+
   return {
-    watchedCreators: Array.isArray(stored.watchedCreators) ? stored.watchedCreators : [],
-    autoTrackAllFollowed: Boolean(stored.autoTrackAllFollowed)
+    watchedCreators: Array.from(merged.values()),
+    autoTrackAllFollowed: autoFollowed || Boolean(stored.autoTrackAllFollowed)
   };
 }
 
@@ -1922,22 +1943,20 @@ async function handleAddWatchedCreator(e) {
     return;
   }
 
+  // 1. Sync to Supabase directly
+  await addWatchedCreatorToSupabase(handle);
+
+  // 2. If extension is present, also notify background
   if (isExtension && chrome?.runtime?.sendMessage) {
     try {
-      const res = await chrome.runtime.sendMessage({
+      await chrome.runtime.sendMessage({
         type: "ADD_WATCHED_CREATOR",
         payload: { creatorHandle: handle }
       });
-      if (res?.ok) {
-        renderWatchedCreatorsList(res.watchedCreators);
-        input.value = "";
-        showToast(`Watching @${handle}! New bots will be tracked from minute 0.`, "success");
-        return;
-      }
     } catch {}
   }
 
-  // Fallback to local storage
+  // 3. Update local state & render
   const config = await getWatchedCreatorsConfig();
   if (!config.watchedCreators.some(w => cleanCreatorHandle(typeof w === "string" ? w : w.creatorHandle) === handle)) {
     config.watchedCreators.push({ creatorHandle: handle, addedAt: new Date().toISOString() });
@@ -1945,27 +1964,27 @@ async function handleAddWatchedCreator(e) {
   }
   renderWatchedCreatorsList(config.watchedCreators);
   if (input) input.value = "";
-  showToast(`Watching @${handle}! New bots will be tracked from minute 0.`, "success");
+  showToast(`Watching @${handle}! Autonomous cloud tracker will capture releases at minute 0.`, "success");
 }
 
 async function handleRemoveWatchedCreator(handle) {
   const clean = cleanCreatorHandle(handle);
   if (!clean) return;
 
+  // 1. Remove from Supabase
+  await removeWatchedCreatorFromSupabase(clean);
+
+  // 2. If extension is present, also notify background
   if (isExtension && chrome?.runtime?.sendMessage) {
     try {
-      const res = await chrome.runtime.sendMessage({
+      await chrome.runtime.sendMessage({
         type: "REMOVE_WATCHED_CREATOR",
         payload: { creatorHandle: clean }
       });
-      if (res?.ok) {
-        renderWatchedCreatorsList(res.watchedCreators);
-        showToast(`Stopped watching @${clean}.`, "info");
-        return;
-      }
     } catch {}
   }
 
+  // 3. Update local state & render
   const config = await getWatchedCreatorsConfig();
   config.watchedCreators = config.watchedCreators.filter(w => cleanCreatorHandle(typeof w === "string" ? w : w.creatorHandle) !== clean);
   await storage.set({ watchedCreators: config.watchedCreators });

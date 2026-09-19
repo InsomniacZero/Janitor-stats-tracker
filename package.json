@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "worker": "node scripts/cloud-worker.js"
   },
   "keywords": [
     "janitorai",
@@ -19,6 +20,7 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
+    "playwright": "^1.49.1",
     "vite": "^5.4.14"
   }
 }

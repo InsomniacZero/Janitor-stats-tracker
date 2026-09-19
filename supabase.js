@@ -15,6 +15,13 @@ function cleanUrl(raw) {
 }
 
 export async function getSupabaseConfig() {
+  if (typeof process !== "undefined" && process.env?.SUPABASE_URL && process.env?.SUPABASE_ANON_KEY) {
+    return {
+      url: cleanUrl(process.env.SUPABASE_URL),
+      anonKey: process.env.SUPABASE_ANON_KEY.trim()
+    };
+  }
+
   try {
     if (typeof chrome !== "undefined" && chrome.storage?.local) {
       const res = await chrome.storage.local.get(["supabaseUrl", "supabaseAnonKey"]);
@@ -558,6 +565,82 @@ export async function deleteTrackedJob(characterId) {
     return res.ok;
   } catch (err) {
     console.error("JStats: failed to delete tracked job from Supabase", err);
+    return false;
+  }
+}
+
+/**
+ * Fetches watched creators from Supabase.
+ */
+export async function fetchWatchedCreatorsFromSupabase() {
+  const config = await getSupabaseConfig();
+  if (!config) return [];
+
+  try {
+    const res = await fetch(`${config.url}/rest/v1/watched_creators?select=*&order=added_at.desc`, {
+      headers: {
+        apikey: config.anonKey,
+        Authorization: `Bearer ${config.anonKey}`
+      }
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data.map(r => ({
+      creatorHandle: r.creator_handle,
+      addedAt: r.added_at
+    })) : [];
+  } catch (err) {
+    console.error("JStats: failed to fetch watched creators from Supabase", err);
+    return [];
+  }
+}
+
+/**
+ * Adds a watched creator to Supabase.
+ */
+export async function addWatchedCreatorToSupabase(creatorHandle) {
+  const config = await getSupabaseConfig();
+  if (!config) return false;
+
+  try {
+    const res = await fetch(`${config.url}/rest/v1/watched_creators`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: config.anonKey,
+        Authorization: `Bearer ${config.anonKey}`,
+        Prefer: "resolution=merge-duplicates"
+      },
+      body: JSON.stringify({
+        creator_handle: creatorHandle,
+        added_at: new Date().toISOString()
+      })
+    });
+    return res.ok;
+  } catch (err) {
+    console.error("JStats: failed to add watched creator to Supabase", err);
+    return false;
+  }
+}
+
+/**
+ * Removes a watched creator from Supabase.
+ */
+export async function removeWatchedCreatorFromSupabase(creatorHandle) {
+  const config = await getSupabaseConfig();
+  if (!config) return false;
+
+  try {
+    const res = await fetch(`${config.url}/rest/v1/watched_creators?creator_handle=eq.${encodeURIComponent(creatorHandle)}`, {
+      method: "DELETE",
+      headers: {
+        apikey: config.anonKey,
+        Authorization: `Bearer ${config.anonKey}`
+      }
+    });
+    return res.ok;
+  } catch (err) {
+    console.error("JStats: failed to delete watched creator from Supabase", err);
     return false;
   }
 }
