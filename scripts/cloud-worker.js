@@ -154,10 +154,39 @@ function extractCharactersFromPayload(obj, depth = 0, seen = new Set()) {
   return results;
 }
 
-async function scrapeCharacterPage(page, characterId) {
+async function scrapeCharacterPage(page, characterId, authToken = "") {
   const cleanId = cleanUuid(characterId);
   if (!cleanId) return null;
 
+  // 1. Try ultra-fast in-page fetch using the active session & bearer token
+  try {
+    const inPageRes = await page.evaluate(async ({ cid, tok }) => {
+      try {
+        const headers = { Accept: "application/json" };
+        if (tok) headers["Authorization"] = `Bearer ${tok}`;
+        const res = await fetch(`/hampter/characters/${cid}`, {
+          credentials: "include",
+          headers
+        });
+        if (res.ok) {
+          return { ok: true, data: await res.json() };
+        }
+        return { ok: false, status: res.status };
+      } catch (err) {
+        return { ok: false, error: err.message };
+      }
+    }, { cid: cleanId, tok: authToken });
+
+    if (inPageRes?.ok && inPageRes?.data) {
+      const chars = extractCharactersFromPayload(inPageRes.data);
+      const match = chars.find(c => c.characterId === cleanId) || chars[0];
+      if (match) return match;
+    } else if (inPageRes?.status === 403 || inPageRes?.status === 401) {
+      console.warn(`  ⚠ JanitorAI returned HTTP ${inPageRes.status} Forbidden (auth token required for NSFW/protected bots).`);
+    }
+  } catch {}
+
+  // 2. Fallback: navigate directly to character page
   let captured = null;
   const onResponse = async (res) => {
     const u = res.url();
@@ -340,6 +369,7 @@ async function runWorker() {
   });
 
   // Inject session cookie if provided
+  let extractedToken = null;
   if (JANITOR_COOKIE || JANITOR_TOKEN) {
     console.log("Injecting JanitorAI auth session credentials into browser context...");
     const cookiesToAdd = [];
@@ -369,16 +399,29 @@ async function runWorker() {
       await context.addCookies(cookiesToAdd);
     }
 
-    const extractedToken = extractTokenFromString(JANITOR_TOKEN) || extractTokenFromString(JANITOR_COOKIE);
+    extractedToken = extractTokenFromString(JANITOR_TOKEN) || extractTokenFromString(JANITOR_COOKIE);
     if (extractedToken) {
       console.log("Extracted valid JanitorAI session JWT. Applying Bearer authorization header...");
       await context.setExtraHTTPHeaders({
         Authorization: `Bearer ${extractedToken}`
       });
     }
+  } else {
+    console.warn("⚠️ WARNING: No JANITOR_COOKIE or JANITOR_TOKEN detected in GitHub Secrets!");
+    console.warn("⚠️ JanitorAI returns 403 Forbidden for bot stats if an active session cookie/token is not provided.");
+    console.warn("⚠️ Please set JANITOR_COOKIE in GitHub: Repo Settings -> Secrets and variables -> Actions.");
   }
 
   const page = await context.newPage();
+
+  console.log("Establishing initial browser session with https://janitorai.com/ ...");
+  try {
+    await page.goto("https://janitorai.com/", { waitUntil: "domcontentloaded", timeout: 25000 });
+    await page.waitForTimeout(3000);
+    console.log(`Initial session established. Page title: "${await page.title()}"`);
+  } catch (err) {
+    console.warn("Initial session load warning:", err.message);
+  }
 
   console.log(`Starting tracker loop (${MAX_CYCLES} cycles, ${CYCLE_DELAY_MS / 1000}s interval)...`);
 
@@ -407,7 +450,7 @@ async function runWorker() {
     // 2. Scrape active bots
     for (const job of activeJobs) {
       console.log(`[Worker] Scraping: "${job.character_name}" (${job.character_id})`);
-      const scraped = await scrapeCharacterPage(page, job.character_id);
+      const scraped = await scrapeCharacterPage(page, job.character_id, extractedToken);
       if (scraped && Number.isFinite(scraped.chats) && Number.isFinite(scraped.msgs)) {
         await insertSnapshot(job.character_id, {
           chats: scraped.chats,
