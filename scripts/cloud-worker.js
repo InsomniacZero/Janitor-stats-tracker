@@ -231,12 +231,10 @@ async function scrapeCharacterPage(page, characterId, authToken = "") {
       const chars = extractCharactersFromPayload(inPageRes.data);
       const match = chars.find(c => c.characterId === cleanId) || chars[0];
       if (match) return match;
-    } else if (inPageRes?.status === 403 || inPageRes?.status === 401) {
-      console.warn(`  ⚠ JanitorAI returned HTTP ${inPageRes.status} Forbidden (auth token required for NSFW/protected bots).`);
     }
   } catch {}
 
-  // 2. Fallback: navigate directly to character page
+  // 2. Navigate directly to character page with live network capture
   let captured = null;
   const onResponse = async (res) => {
     const u = res.url();
@@ -263,29 +261,110 @@ async function scrapeCharacterPage(page, characterId, authToken = "") {
     page.off("response", onResponse);
   }
 
-  // Fallback: evaluate DOM if API was not caught
+  // 3. Fallback: evaluate DOM, scripts, ribbons, and badges
   if (!captured) {
     try {
       captured = await page.evaluate((cid) => {
-        const h1 = document.querySelector("h1")?.innerText?.trim();
-        const text = document.body.innerText || "";
-        const chatsMatch = text.match(/([0-9,]+)\s*(?:chats?)/i);
-        const msgsMatch = text.match(/([0-9,]+)\s*(?:messages?|msgs?)/i);
-        if (chatsMatch && msgsMatch) {
-          const chats = parseInt(chatsMatch[1].replace(/,/g, ""), 10);
-          const msgs = parseInt(msgsMatch[1].replace(/,/g, ""), 10);
-          if (Number.isFinite(chats) && Number.isFinite(msgs)) {
-            return {
-              characterId: cid,
-              character_name: h1 || "JanitorAI Character",
-              chats,
-              msgs,
-              favourites: null,
-              comments: null,
-              publishedChats: null
-            };
+        function parseStat(value) {
+          if (value == null) return null;
+          const text = String(value).trim().toLowerCase().replace(/,/g, "").replace(/\s+/g, "");
+          const match = text.match(/^([\d.]+)([kmb])?$/i);
+          if (!match) return null;
+          let number = Number(match[1]);
+          if (!Number.isFinite(number)) return null;
+          if (match[2] === "k") number *= 1e3;
+          if (match[2] === "m") number *= 1e6;
+          if (match[2] === "b") number *= 1e9;
+          return Math.round(number);
+        }
+
+        const h1 = document.querySelector("h1, h2.chakra-heading")?.innerText?.trim() || "JanitorAI Character";
+        const avatarEl = document.querySelector('img[src*="bot-avatars"], img[src*="characters"], .character-avatar img');
+        const creatorEl = document.querySelector('a[href*="/profiles/"], a[href^="/@"]');
+        const creator = creatorEl?.textContent?.replace(/^@|\s+/g, "") || null;
+
+        // A. Check script tags for exact counts
+        for (const s of Array.from(document.querySelectorAll("script"))) {
+          const txt = s.textContent || "";
+          if (txt.includes("message") && txt.includes("chat")) {
+            const mMsg = txt.match(/"(?:total_)?messages?"\s*:\s*(\d+)/);
+            const mChat = txt.match(/"(?:total_)?chats?"\s*:\s*(\d+)/);
+            if (mMsg && mChat) {
+              const msgs = Number(mMsg[1]);
+              const chats = Number(mChat[1]);
+              if (Number.isFinite(msgs) && Number.isFinite(chats)) {
+                return {
+                  characterId: cid,
+                  character_name: h1,
+                  avatar: avatarEl?.src || null,
+                  creator,
+                  chats,
+                  msgs,
+                  favourites: null,
+                  comments: null,
+                  publishedChats: null
+                };
+              }
+            }
           }
         }
+
+        // B. Check ribbon (.character-chat-messages-stat-ribbon-tag-hstack)
+        const ribbon = document.querySelector(".character-chat-messages-stat-ribbon-tag-hstack");
+        if (ribbon) {
+          const pEls = Array.from(ribbon.querySelectorAll("p")).map(p => p.textContent.trim()).filter(Boolean);
+          if (pEls.length >= 2) {
+            const chats = parseStat(pEls[0]);
+            const msgs = parseStat(pEls[1]);
+            if (Number.isFinite(chats) && Number.isFinite(msgs)) {
+              return {
+                characterId: cid,
+                character_name: h1,
+                avatar: avatarEl?.src || null,
+                creator,
+                chats,
+                msgs,
+                favourites: null,
+                comments: null,
+                publishedChats: null
+              };
+            }
+          }
+        }
+
+        // C. Check leaf element text (e.g. 1.6k, 14k badges under character title)
+        const leafEls = Array.from(document.querySelectorAll("p, span, div, b, strong"))
+          .filter(el => el.children.length === 0 && el.innerText && el.innerText.trim());
+
+        const statCandidates = [];
+        for (const el of leafEls) {
+          const t = el.innerText.trim();
+          if (/^[\d.,]+[kmb]?$/i.test(t)) {
+            const num = parseStat(t);
+            if (num !== null) {
+              statCandidates.push(num);
+            }
+          }
+        }
+
+        const favBtn = document.querySelector('button[title*="favorite" i], button[aria-label*="favorite" i]');
+        const favDisplay = favBtn?.parentElement?.querySelector('[class*="_number_"]')?.textContent;
+        const favCount = favDisplay ? parseStat(favDisplay) : null;
+
+        if (statCandidates.length >= 2) {
+          return {
+            characterId: cid,
+            character_name: h1,
+            avatar: avatarEl?.src || null,
+            creator,
+            chats: statCandidates[0],
+            msgs: statCandidates[1],
+            favourites: favCount ?? (statCandidates.length >= 3 ? statCandidates[2] : null),
+            comments: statCandidates.length >= 4 ? statCandidates[3] : null,
+            publishedChats: null
+          };
+        }
+
         return null;
       }, cleanId);
     } catch {}
@@ -322,6 +401,30 @@ async function checkWatchedCreators(page, watchedCreators, existingJobs) {
       const profileUrl = `https://janitorai.com/profiles/${clean}`;
       await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
       await page.waitForTimeout(4000);
+
+      // DOM extraction on profile page
+      const domChars = await page.evaluate((creatorClean) => {
+        const found = [];
+        const links = Array.from(document.querySelectorAll('a[href*="/characters/"]'));
+        for (const a of links) {
+          const m = a.getAttribute("href")?.match(/\/characters\/([0-9a-f]{8}-[0-9a-f-]{27,})/i);
+          if (m && m[1]) {
+            const cid = m[1].toLowerCase();
+            const name = a.querySelector("h2, h3, h4, p, span")?.textContent?.trim() || a.textContent?.trim() || "JanitorAI Character";
+            const img = a.querySelector("img")?.src || null;
+            found.push({
+              characterId: cid,
+              character_name: name,
+              avatar: img,
+              creator: creatorClean,
+              chats: 0,
+              msgs: 0
+            });
+          }
+        }
+        return found;
+      }, clean);
+      capturedChars.push(...domChars);
     } catch (err) {
       console.warn(`[Worker] Could not load creator profile @${clean}: ${err.message}`);
     } finally {
@@ -545,7 +648,11 @@ async function runWorker() {
   await browser.close();
 }
 
-runWorker().catch(err => {
-  console.error("Worker fatal error:", err);
-  process.exit(1);
-});
+const isMain = Boolean(process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop()));
+if (isMain) {
+  runWorker().catch(err => {
+    console.error("Worker fatal error:", err);
+    process.exit(1);
+  });
+}
+
