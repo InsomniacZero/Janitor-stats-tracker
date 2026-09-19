@@ -1044,18 +1044,8 @@ function setupRealtimeListener(characterId) {
   if (!characterId) return;
 
   realtimeUnsubscribe = subscribeToRealtimeSnapshots(characterId, (newSnapshot) => {
-    if (!newSnapshot || newSnapshot.characterId !== state.activeCharacterId) return;
-
-    // Avoid duplicate insertions
-    const exists = state.snapshots.some(s => s.timestamp === newSnapshot.timestamp);
-    if (exists) return;
-
-    const normalized = normalizeSnapshots([newSnapshot])[0];
-    state.snapshots.push(normalized);
-    state.snapshots.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-
-    render();
-    showToast(`Received 1m live snapshot for ${getCurrent()?.characterName || 'character'}.`, "info");
+    if (!newSnapshot) return;
+    handleIncomingSnapshot(newSnapshot.characterId || characterId, newSnapshot);
   });
 }
 
@@ -1120,7 +1110,27 @@ async function handleIncomingSnapshot(characterId, newSnapshot) {
   if (cleanIncoming && cleanCurrent && cleanIncoming === cleanCurrent) {
     const exists = state.snapshots.some(s => s.timestamp === newSnapshot.timestamp);
     if (!exists) {
-      const normalized = normalizeSnapshots([newSnapshot])[0];
+      // Find latest valid comments and favourites to protect against transient 0s
+      const lastWithComments = [...state.snapshots].reverse().find(s => Number.isFinite(s.comments) && s.comments > 0);
+      const lastWithFavs = [...state.snapshots].reverse().find(s => Number.isFinite(s.favourites) && s.favourites > 0);
+
+      const resolvedComments = (Number.isFinite(newSnapshot.comments) && newSnapshot.comments > 0)
+        ? newSnapshot.comments
+        : (lastWithComments ? lastWithComments.comments : (newSnapshot.comments || 0));
+
+      const resolvedFavs = (Number.isFinite(newSnapshot.favourites) && newSnapshot.favourites > 0)
+        ? newSnapshot.favourites
+        : (lastWithFavs ? lastWithFavs.favourites : (newSnapshot.favourites || 0));
+
+      const sanitizedSnapshot = {
+        ...newSnapshot,
+        comments: resolvedComments,
+        commentsDisplay: resolvedComments.toLocaleString(),
+        favourites: resolvedFavs,
+        favouritesDisplay: resolvedFavs.toLocaleString()
+      };
+
+      const normalized = normalizeSnapshots([sanitizedSnapshot])[0];
       state.snapshots.push(normalized);
       state.snapshots.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
       await render();

@@ -320,32 +320,63 @@ export async function insertSnapshot(characterId, snapshot) {
  */
 export async function fetchCharacterSnapshots(characterId) {
   const config = await getSupabaseConfig();
-  if (!config) return [];
+  if (!config || !characterId) return [];
 
   try {
-    const query = `${config.url}/rest/v1/character_snapshots?character_id=eq.${encodeURIComponent(characterId)}&order=timestamp.asc&limit=10000`;
-    const res = await fetch(query, {
-      headers: {
-        apikey: config.anonKey,
-        Authorization: `Bearer ${config.anonKey}`,
-        Accept: "application/json"
-      }
-    });
+    const cleanId = characterId.includes("/") ? characterId.split("/").pop() : characterId;
+    let allRows = [];
+    const pageSize = 1000;
+    let offset = 0;
 
-    if (!res.ok) return [];
-    const rows = await res.json();
-    return rows.map(r => {
+    while (true) {
+      const query = `${config.url}/rest/v1/character_snapshots?character_id=eq.${encodeURIComponent(cleanId)}&order=timestamp.asc&limit=${pageSize}&offset=${offset}`;
+      const res = await fetch(query, {
+        headers: {
+          apikey: config.anonKey,
+          Authorization: `Bearer ${config.anonKey}`,
+          Accept: "application/json"
+        }
+      });
+
+      if (!res.ok) break;
+      const rows = await res.json();
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      allRows = allRows.concat(rows);
+      if (rows.length < pageSize) break;
+      offset += pageSize;
+    }
+
+    let lastKnownComments = null;
+    let lastKnownFavourites = null;
+
+    return allRows.map(r => {
       const chats = Number(r.chats);
       const msgs = Number(r.msgs);
+      let comments = Number(r.comments);
+      let favourites = Number(r.favourites);
+
+      // Protect against transient zeroes from feed card artifacts
+      if (Number.isFinite(comments) && comments > 0) {
+        lastKnownComments = comments;
+      } else if ((!Number.isFinite(comments) || comments <= 0) && lastKnownComments != null) {
+        comments = lastKnownComments;
+      }
+
+      if (Number.isFinite(favourites) && favourites > 0) {
+        lastKnownFavourites = favourites;
+      } else if ((!Number.isFinite(favourites) || favourites <= 0) && lastKnownFavourites != null) {
+        favourites = lastKnownFavourites;
+      }
+
       return {
         timestamp: r.timestamp,
         characterId: r.character_id,
         chats,
         msgs,
         chatMsgRatio: chats > 0 ? Number((msgs / chats).toFixed(3)) : null,
-        comments: Number(r.comments),
-        favourites: Number(r.favourites),
-        publishedChats: Number(r.published_chats)
+        comments: Number.isFinite(comments) && comments >= 0 ? comments : 0,
+        favourites: Number.isFinite(favourites) && favourites >= 0 ? favourites : 0,
+        publishedChats: Number(r.published_chats) || 0
       };
     });
   } catch (err) {
