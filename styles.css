@@ -832,6 +832,14 @@ select.select:focus {
   stroke-linecap: round;
 }
 
+.chart-gap-line {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  opacity: 0.42;
+  pointer-events: none;
+}
+
 .chart-crosshair {
   stroke: rgba(217, 119, 87, 0.45);
   stroke-width: 1.5;

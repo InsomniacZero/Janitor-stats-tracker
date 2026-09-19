@@ -174,21 +174,160 @@ function enrichPoints(snapshots, key) {
 }
 
 /**
- * Builds SVG elements for hourly marks:
- * 1. Dots on the line itself at hourly boundaries
- * 2. "+" tick marks on graph top and bottom axes
- * 3. Subtle vertical hourly guidelines
- * 4. Hourly time labels along the bottom edge
+ * Calculates a clean, human-friendly Y axis scale with proper increments.
+ * For ratio metrics (or published chats), ensures baseline starts at 0 and goes to ~20.
+ * For other metrics, calculates nice rounded steps starting at 0 to avoid misleading baseline truncations.
  */
-function buildHourlyMarkers({ sampled, valid, pad, width, height, x, y, color }) {
-  if (!valid || valid.length < 2) return { hourDots: "", edgeMarks: "", hourLines: "" };
+function getNiceYScale(title, minVal, maxVal) {
+  const isRatio = typeof title === "string" && title.toLowerCase().includes("ratio");
+  const isPub = typeof title === "string" && title.toLowerCase().includes("published");
 
-  const tStart = new Date(valid[0].timestamp).getTime();
-  const tEnd = new Date(valid.at(-1).timestamp).getTime();
+  if (isRatio || isPub) {
+    const yMin = 0;
+    const yMax = maxVal <= 20 ? 20 : Math.ceil(maxVal / 5) * 5;
+    const step = (yMax - yMin) / 4; // 5 clean ticks: 0, 5, 10, 15, 20
+    const ticks = [];
+    for (let v = yMin; v <= yMax + 0.001; v += step) {
+      ticks.push(Math.round(v));
+    }
+    return { yMin, yMax, step, ticks };
+  }
+
+  // General nice scale starting at 0 for non-negative cumulative stats
+  const yMin = 0;
+  let max = Math.max(1, maxVal);
+  max = max * 1.06; // 6% headroom
+  const targetTicks = 5;
+  const rawStep = max / (targetTicks - 1);
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const frac = rawStep / mag;
+  let niceFrac;
+  if (frac <= 1.2) niceFrac = 1;
+  else if (frac <= 2.5) niceFrac = 2;
+  else if (frac <= 6) niceFrac = 5;
+  else niceFrac = 10;
+  const step = niceFrac * mag;
+  const yMax = Math.ceil(max / step) * step;
+
+  const ticks = [];
+  for (let v = 0; v <= yMax + step * 0.01; v += step) {
+    ticks.push(v);
+  }
+  return { yMin, yMax, step, ticks };
+}
+
+/**
+ * Builds time-linear SVG paths with tracking gap detection.
+ * When tracking was offline (e.g. gap > maxGapMs), breaks the solid line
+ * and inserts a subtle dashed bridge, preventing misleading steep cliffs.
+ */
+function buildTimePaths(validPoints, xForTime, yForValue, pad, innerH, maxGapMs = 35 * 60 * 1000) {
+  if (!validPoints || !validPoints.length) {
+    return { solidPaths: [], gapLines: [], areaPaths: [] };
+  }
+
+  const segments = [];
+  const gapLines = [];
+  let currentSegment = [validPoints[0]];
+
+  for (let i = 1; i < validPoints.length; i++) {
+    const prev = validPoints[i - 1];
+    const curr = validPoints[i];
+    const tPrev = new Date(prev.timestamp).getTime();
+    const tCurr = new Date(curr.timestamp).getTime();
+    const diff = tCurr - tPrev;
+
+    if (diff > maxGapMs) {
+      segments.push(currentSegment);
+      currentSegment = [curr];
+
+      const x1 = xForTime(tPrev);
+      const y1 = yForValue(prev.value);
+      const x2 = xForTime(tCurr);
+      const y2 = yForValue(curr.value);
+      gapLines.push({ x1, y1, x2, y2, gapMinutes: Math.round(diff / 60000) });
+    } else {
+      currentSegment.push(curr);
+    }
+  }
+
+  if (currentSegment.length) {
+    segments.push(currentSegment);
+  }
+
+  const baselineY = pad.top + innerH;
+  const solidPaths = [];
+  const areaPaths = [];
+
+  for (const seg of segments) {
+    if (seg.length === 0) continue;
+    let pathD = "";
+    seg.forEach((p, idx) => {
+      const px = xForTime(new Date(p.timestamp).getTime());
+      const py = yForValue(p.value);
+      pathD += `${idx === 0 ? "M" : "L"}${px.toFixed(2)} ${py.toFixed(2)} `;
+    });
+
+    // If single point segment, render tiny tick so it remains visible
+    if (seg.length === 1) {
+      const px = xForTime(new Date(seg[0].timestamp).getTime());
+      const py = yForValue(seg[0].value);
+      pathD = `M${(px - 0.5).toFixed(2)} ${py.toFixed(2)} L${(px + 0.5).toFixed(2)} ${py.toFixed(2)}`;
+    }
+
+    solidPaths.push(pathD.trim());
+
+    if (seg.length > 1) {
+      const firstX = xForTime(new Date(seg[0].timestamp).getTime());
+      const lastX = xForTime(new Date(seg.at(-1).timestamp).getTime());
+      const areaD = `${pathD.trim()} L${lastX.toFixed(2)} ${baselineY.toFixed(2)} L${firstX.toFixed(2)} ${baselineY.toFixed(2)} Z`;
+      areaPaths.push(areaD);
+    }
+  }
+
+  return { solidPaths, gapLines, areaPaths };
+}
+
+/**
+ * Builds SVG elements for hourly marks strictly on the time axis:
+ * 1. Hourly ticks are mathematically guaranteed to be the exact same length apart in pixels.
+ * 2. Vertical guidelines & edge "+" ticks span across the entire window uniformly.
+ * 3. Line dots are only placed when real tracking data exists near that hour (omitted during gaps).
+ */
+function buildHourlyMarkers(options) {
+  const {
+    tStart: optTStart,
+    tEnd: optTEnd,
+    sampled,
+    valid,
+    pad,
+    width,
+    height,
+    xForTime: optXForTime,
+    yForValue: optYForValue,
+    x: legacyX,
+    y: legacyY,
+    color,
+    validPoints = valid || sampled || [],
+    maxGapMs = 35 * 60 * 1000
+  } = options;
+
+  const pts = validPoints.filter(p => p && p.timestamp);
+  if (!pts.length) return { hourDots: "", edgeMarks: "", hourLines: "" };
+
+  const tStart = optTStart || new Date(pts[0].timestamp).getTime();
+  const tEnd = optTEnd || new Date(pts.at(-1).timestamp).getTime();
   const durationMs = tEnd - tStart;
   if (!Number.isFinite(durationMs) || durationMs <= 0) {
     return { hourDots: "", edgeMarks: "", hourLines: "" };
   }
+
+  const innerW = width - pad.left - pad.right;
+  const bottomY = height - pad.bottom;
+  const topY = pad.top;
+
+  const xForTime = optXForTime || (t => pad.left + Math.max(0, Math.min(1, (t - tStart) / durationMs)) * innerW);
+  const yForValue = optYForValue || legacyY;
 
   // Determine appropriate hourly step based on window duration
   let stepMs = 3600 * 1000; // 1 hour default
@@ -209,36 +348,15 @@ function buildHourlyMarkers({ sampled, valid, pad, width, height, x, y, color })
   let edgeMarks = "";
   let hourLines = "";
 
-  const bottomY = height - pad.bottom;
-  const topY = pad.top;
-
   for (let t = firstBoundary; t <= tEnd; t += stepMs) {
-    // Find closest data point to boundary
-    let closest = sampled[0];
-    let minDiff = Math.abs(new Date(sampled[0].timestamp).getTime() - t);
-    for (let i = 1; i < sampled.length; i++) {
-      const diff = Math.abs(new Date(sampled[i].timestamp).getTime() - t);
-      if (diff < minDiff) {
-        minDiff = diff;
-        closest = sampled[i];
-      }
-    }
+    // Exact same length apart in pixels: strictly proportional to time t
+    const cx = xForTime(t);
+    if (cx < pad.left - 0.5 || cx > width - pad.right + 0.5) continue;
 
-    if (minDiff > stepMs * 0.75) continue;
-
-    const sampleIdx = sampled.indexOf(closest);
-    const cx = x(sampleIdx);
-    const cy = Number.isFinite(closest.value) && y ? y(closest.value) : null;
-
-    // 1. Hourly dot on the line itself
-    if (cy != null && Number.isFinite(cy)) {
-      hourDots += `<circle class="chart-hour-dot" cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="3.5" fill="${color || "#d97757"}" stroke="#181715" stroke-width="2" />`;
-    }
-
-    // 2. Subtle vertical guideline across the chart
+    // 1. Subtle vertical guideline across the chart at uniform hourly intervals
     hourLines += `<line class="chart-hour-guideline" x1="${cx.toFixed(2)}" y1="${topY}" x2="${cx.toFixed(2)}" y2="${bottomY}" />`;
 
-    // 3. "+" Edge mark on bottom axis
+    // 2. "+" Edge mark on bottom axis
     edgeMarks += `
       <g class="chart-hour-edge-plus" transform="translate(${cx.toFixed(2)}, ${bottomY})">
         <line x1="-3.5" y1="0" x2="3.5" y2="0" class="chart-edge-plus-line" />
@@ -246,7 +364,7 @@ function buildHourlyMarkers({ sampled, valid, pad, width, height, x, y, color })
       </g>
     `;
 
-    // 4. "+" Edge mark on top axis
+    // 3. "+" Edge mark on top axis
     edgeMarks += `
       <g class="chart-hour-edge-plus" transform="translate(${cx.toFixed(2)}, ${topY})">
         <line x1="-3" y1="0" x2="3" y2="0" class="chart-edge-plus-line" />
@@ -254,11 +372,38 @@ function buildHourlyMarkers({ sampled, valid, pad, width, height, x, y, color })
       </g>
     `;
 
-    // 5. Hourly label below bottom axis (skip if too close to outer date labels)
-    if (cx >= pad.left + 28 && cx <= width - pad.right - 28) {
+    // 4. Hourly label below bottom axis
+    if (cx >= pad.left + 24 && cx <= width - pad.right - 24) {
       const d = new Date(t);
       const labelStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
       edgeMarks += `<text class="axis-label chart-hour-label" x="${cx.toFixed(2)}" y="${bottomY + 16}" text-anchor="middle">${escapeHtml(labelStr)}</text>`;
+    }
+
+    // 5. Hourly dot on the line: only place if data was actively tracked near this hour (omitted during gaps)
+    if (yForValue && pts.length > 0) {
+      let pBefore = null;
+      let pAfter = null;
+      for (let i = 0; i < pts.length; i++) {
+        const ptTime = new Date(pts[i].timestamp).getTime();
+        if (ptTime <= t) pBefore = pts[i];
+        if (ptTime >= t && !pAfter) pAfter = pts[i];
+      }
+
+      if (pBefore && pAfter) {
+        const t1 = new Date(pBefore.timestamp).getTime();
+        const t2 = new Date(pAfter.timestamp).getTime();
+        const gap = t2 - t1;
+
+        if (gap <= maxGapMs && Math.min(Math.abs(t - t1), Math.abs(t - t2)) <= 25 * 60 * 1000) {
+          const valAtT = t2 === t1
+            ? pBefore.value
+            : pBefore.value + ((t - t1) / (t2 - t1)) * (pAfter.value - pBefore.value);
+          if (Number.isFinite(valAtT)) {
+            const cy = yForValue(valAtT);
+            hourDots += `<circle class="chart-hour-dot" cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="3.5" fill="${color || "#d97757"}" stroke="#181715" stroke-width="2" />`;
+          }
+        }
+      }
     }
   }
 
@@ -425,6 +570,8 @@ export {
   sanitizeTransientZeroes,
   downsample,
   enrichPoints,
+  getNiceYScale,
+  buildTimePaths,
   buildHourlyMarkers,
   makeTooltipMarkup,
   bindChartTooltips,
@@ -448,6 +595,8 @@ if (typeof globalThis !== "undefined") {
     sanitizeTransientZeroes,
     downsample,
     enrichPoints,
+    getNiceYScale,
+    buildTimePaths,
     buildHourlyMarkers,
     makeTooltipMarkup,
     bindChartTooltips,

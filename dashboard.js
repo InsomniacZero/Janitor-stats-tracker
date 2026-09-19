@@ -14,6 +14,8 @@ import {
   sanitizeTransientZeroes,
   downsample,
   enrichPoints,
+  getNiceYScale,
+  buildTimePaths,
   buildHourlyMarkers,
   makeTooltipMarkup,
   bindChartTooltips
@@ -285,57 +287,74 @@ function makeSvgChart(title, color, sourcePoints, maxPoints = 800) {
 
   const min = Math.min(...valid.map(p => p.value));
   const max = Math.max(...valid.map(p => p.value));
-  const range = max === min ? Math.max(1, Math.abs(max) * 0.04) : max - min;
-  const yMin = max === min ? Math.max(0, min - range) : min;
-  const yMax = max === min ? max + range : max;
+  const { yMin, yMax, ticks } = getNiceYScale(title, min, max);
+
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
-  const x = i => sampled.length <= 1 ? pad.left + innerW / 2 : pad.left + (Math.max(0, Math.min(i, sampled.length - 1)) / (sampled.length - 1)) * innerW;
-  const y = value => pad.top + Math.max(0, Math.min(1, 1 - (value - yMin) / (yMax - yMin || 1))) * innerH;
 
-  const grid = [0, .25, .5, .75, 1].map(t => {
-    const yy = pad.top + t * innerH;
-    const value = yMax - t * (yMax - yMin);
-    return `<line class="gridline" x1="${pad.left}" y1="${yy}" x2="${width - pad.right}" y2="${yy}"/><text class="axis-label" x="${pad.left - 10}" y="${yy + 4}" text-anchor="end">${escapeHtml(formatCompact(value))}</text>`;
+  const tStart = new Date(valid[0].timestamp).getTime();
+  const tEnd = new Date(valid.at(-1).timestamp).getTime();
+  const durationMs = Math.max(60000, tEnd - tStart);
+
+  const xForTime = t => valid.length <= 1
+    ? pad.left + innerW / 2
+    : pad.left + Math.max(0, Math.min(1, (t - tStart) / durationMs)) * innerW;
+
+  const yForValue = value => pad.top + Math.max(0, Math.min(1, 1 - (value - yMin) / (yMax - yMin || 1))) * innerH;
+
+  const isRatio = typeof title === "string" && title.toLowerCase().includes("ratio");
+  const grid = ticks.map(val => {
+    const yy = yForValue(val);
+    const labelText = isRatio ? val.toFixed(0) : formatCompact(val);
+    return `<line class="gridline" x1="${pad.left}" y1="${yy.toFixed(2)}" x2="${(width - pad.right).toFixed(2)}" y2="${yy.toFixed(2)}"/><text class="axis-label" x="${pad.left - 10}" y="${(yy + 4).toFixed(2)}" text-anchor="end">${escapeHtml(labelText)}</text>`;
   }).join("");
-
-  const linePath = chartPath(sampled, x, y);
-
-  // Area path below the line for subtle aesthetic depth
-  let areaPath = "";
-  if (valid.length > 1) {
-    const firstX = x(sampled.indexOf(valid[0]));
-    const lastX = x(sampled.indexOf(valid.at(-1)));
-    const baselineY = pad.top + innerH;
-    areaPath = `${linePath} L${lastX.toFixed(2)} ${baselineY.toFixed(2)} L${firstX.toFixed(2)} ${baselineY.toFixed(2)} Z`;
-  }
-
-  // Points metadata for crosshair hover tracking without dots
-  const pointsData = valid.map(point => {
-    const sampleIdx = sampled.indexOf(point);
-    const cx = x(sampleIdx);
-    const cy = y(point.value);
-    const tooltipHtml = makeTooltipMarkup({ label: title, point, color });
-    return { cx, cy, tooltipHtml };
-  });
-
-  const serializedPoints = escapeHtml(JSON.stringify(pointsData));
-
-  const firstLabel = new Date(sampled[0].timestamp).toLocaleString([], { month: "short", day: "numeric" });
-  const lastLabel = new Date(sampled.at(-1).timestamp).toLocaleString([], { month: "short", day: "numeric" });
 
   const gradientId = `grad_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
   const clipId = `clip_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
 
+  // Build time-linear paths with tracking gap detection (35 minutes threshold)
+  const { solidPaths, gapLines, areaPaths } = buildTimePaths(valid, xForTime, yForValue, pad, innerH, 35 * 60 * 1000);
+  const solidLinesSvg = solidPaths.map(d => `<path class="chart-line" clip-path="url(#${clipId})" d="${d}" stroke="${color}" />`).join("");
+  const gapLinesSvg = gapLines.map(g => `<line class="chart-gap-line" clip-path="url(#${clipId})" x1="${g.x1.toFixed(2)}" y1="${g.y1.toFixed(2)}" x2="${g.x2.toFixed(2)}" y2="${g.y2.toFixed(2)}" stroke="${color}" />`).join("");
+  const areaPathsSvg = areaPaths.map(d => `<path class="chart-area" clip-path="url(#${clipId})" d="${d}" fill="url(#${gradientId})" />`).join("");
+
+  // Points metadata for crosshair hover tracking
+  const pointsData = valid.map(point => {
+    const ptTime = new Date(point.timestamp).getTime();
+    const cx = xForTime(ptTime);
+    const cy = yForValue(point.value);
+    const tooltipHtml = makeTooltipMarkup({ label: title, point, color });
+    return { cx, cy, tooltipHtml, timestamp: ptTime };
+  });
+
+  const serializedPoints = escapeHtml(JSON.stringify(pointsData));
+
+  const firstDate = new Date(tStart);
+  const lastDate = new Date(tEnd);
+  const isSameDay = firstDate.toDateString() === lastDate.toDateString();
+  const firstLabel = firstDate.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  const lastLabel = lastDate.toLocaleString([], {
+    month: isSameDay ? undefined : "short",
+    day: isSameDay ? undefined : "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+
   const { hourDots, edgeMarks, hourLines } = buildHourlyMarkers({
-    sampled,
-    valid,
+    tStart,
+    tEnd,
     pad,
     width,
     height,
-    x,
-    y,
-    color
+    xForTime,
+    yForValue,
+    color,
+    validPoints: valid
   });
 
   return `
@@ -351,8 +370,9 @@ function makeSvgChart(title, color, sourcePoints, maxPoints = 800) {
       </defs>
       ${grid}
       ${hourLines}
-      ${areaPath ? `<path class="chart-area" clip-path="url(#${clipId})" d="${areaPath}" fill="url(#${gradientId})" />` : ""}
-      <path class="chart-line" clip-path="url(#${clipId})" d="${linePath}" stroke="${color}" />
+      ${areaPathsSvg}
+      ${gapLinesSvg}
+      ${solidLinesSvg}
       ${hourDots}
       ${edgeMarks}
       <line class="chart-crosshair" clip-path="url(#${clipId})" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" />
@@ -407,32 +427,40 @@ function makeCombinedChart(snapshots) {
   const yMax = max + spread * 0.12;
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
-  const x = i => sampled.length <= 1 ? pad.left + innerW / 2 : pad.left + (Math.max(0, Math.min(i, sampled.length - 1)) / (sampled.length - 1)) * innerW;
+
+  const validSampled = sampled.filter(p => p && p.timestamp);
+  const tStart = new Date(validSampled[0].timestamp).getTime();
+  const tEnd = new Date(validSampled.at(-1).timestamp).getTime();
+  const durationMs = Math.max(60000, tEnd - tStart);
+
+  const xForTime = t => validSampled.length <= 1
+    ? pad.left + innerW / 2
+    : pad.left + Math.max(0, Math.min(1, (t - tStart) / durationMs)) * innerW;
+
   const y = value => pad.top + Math.max(0, Math.min(1, 1 - (value - yMin) / (yMax - yMin || 1))) * innerH;
 
   let grid = [0, .25, .5, .75, 1].map(t => {
     const yy = pad.top + t * innerH;
     const value = yMax - t * (yMax - yMin);
-    return `<line class="gridline" x1="${pad.left}" y1="${yy}" x2="${width - pad.right}" y2="${yy}"/><text class="axis-label" x="${pad.left - 10}" y="${yy + 4}" text-anchor="end">${Math.round(value)}</text>`;
+    return `<line class="gridline" x1="${pad.left}" y1="${yy.toFixed(2)}" x2="${(width - pad.right).toFixed(2)}" y2="${yy.toFixed(2)}"/><text class="axis-label" x="${pad.left - 10}" y="${(yy + 4).toFixed(2)}" text-anchor="end">${Math.round(value)}%</text>`;
   }).join("");
 
   let linesSvg = "";
   series.forEach(seriesInfo => {
     const valid = seriesInfo.points.filter(p => Number.isFinite(p.value));
-    let path = "";
-    let started = false;
-    valid.forEach(point => {
-      const sampleIndex = typeof point.sampleIndex === "number" ? point.sampleIndex : sampled.findIndex(p => p.originalIndex === point.originalIndex);
-      const command = started ? "L" : "M";
-      path += `${command}${x(sampleIndex).toFixed(2)} ${y(point.value).toFixed(2)} `;
-      started = true;
+    const { solidPaths, gapLines } = buildTimePaths(valid, xForTime, y, pad, innerH, 35 * 60 * 1000);
+    solidPaths.forEach(d => {
+      linesSvg += `<path class="chart-line" clip-path="url(#clip_combined)" d="${d}" stroke="${seriesInfo.color}"/>`;
     });
-    linesSvg += `<path class="chart-line" clip-path="url(#clip_combined)" d="${path.trim()}" stroke="${seriesInfo.color}"/>`;
+    gapLines.forEach(g => {
+      linesSvg += `<line class="chart-gap-line" clip-path="url(#clip_combined)" x1="${g.x1.toFixed(2)}" y1="${g.y1.toFixed(2)}" x2="${g.x2.toFixed(2)}" y2="${g.y2.toFixed(2)}" stroke="${seriesInfo.color}"/>`;
+    });
   });
 
   // Build multi-series snapshot points data for crosshair
   const pointsData = sampled.map((sPoint, sIdx) => {
-    const cx = x(sIdx);
+    const ptTime = new Date(sPoint.timestamp).getTime();
+    const cx = xForTime(ptTime);
     const dateStr = new Date(sPoint.timestamp).toLocaleString([], {
       month: "short",
       day: "numeric",
@@ -465,21 +493,38 @@ function makeCombinedChart(snapshots) {
     const primarySeries = series[0]?.points[sIdx];
     const cy = primarySeries && Number.isFinite(primarySeries.value) ? y(primarySeries.value) : pad.top + innerH / 2;
 
-    return { cx, cy, tooltipHtml };
+    return { cx, cy, tooltipHtml, timestamp: ptTime };
   });
 
   const serializedPoints = escapeHtml(JSON.stringify(pointsData));
 
   const primaryValid = series[0]?.points.filter(p => Number.isFinite(p.value)) || [];
   const { edgeMarks, hourLines } = buildHourlyMarkers({
-    sampled,
-    valid: primaryValid.length ? primaryValid : sampled.filter(p => p.timestamp),
+    tStart,
+    tEnd,
     pad,
     width,
     height,
-    x,
-    y: null,
-    color: "#d97757"
+    xForTime,
+    yForValue: null,
+    color: "#d97757",
+    validPoints: primaryValid.length ? primaryValid : sampled.filter(p => p.timestamp)
+  });
+
+  const firstDate = new Date(tStart);
+  const lastDate = new Date(tEnd);
+  const isSameDay = firstDate.toDateString() === lastDate.toDateString();
+  const firstLabel = firstDate.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  const lastLabel = lastDate.toLocaleString([], {
+    month: isSameDay ? undefined : "short",
+    day: isSameDay ? undefined : "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
   });
 
   return `
@@ -495,6 +540,8 @@ function makeCombinedChart(snapshots) {
       ${edgeMarks}
       <line class="chart-crosshair" clip-path="url(#clip_combined)" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" />
       <circle class="chart-active-dot" cx="0" cy="0" r="4.5" fill="#d97757" stroke="#181715" stroke-width="2" style="display: none;" />
+      <text class="axis-label" x="${pad.left}" y="${height - 12}">${escapeHtml(firstLabel)}</text>
+      <text class="axis-label" x="${width - pad.right}" y="${height - 12}" text-anchor="end">${escapeHtml(lastLabel)}</text>
     </svg>
     <div class="chart-tooltip" role="status"></div>
   `;
