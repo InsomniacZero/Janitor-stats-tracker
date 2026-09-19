@@ -370,6 +370,22 @@ async function scrapeCharacterPage(page, characterId, authToken = "") {
     } catch {}
   }
 
+  if (!captured) {
+    try {
+      const diag = await page.evaluate(() => {
+        return {
+          title: document.title,
+          url: location.href,
+          h1: document.querySelector("h1, h2")?.innerText?.trim() || "No heading",
+          bodyPreview: (document.body?.innerText || "").slice(0, 200).replace(/\n+/g, " ")
+        };
+      });
+      console.warn(`  [Diag for ${cleanId}] Title: "${diag.title}" | H1: "${diag.h1}" | Body: "${diag.bodyPreview}"`);
+    } catch (e) {
+      console.warn(`  [Diag error for ${cleanId}]: ${e.message}`);
+    }
+  }
+
   return captured;
 }
 
