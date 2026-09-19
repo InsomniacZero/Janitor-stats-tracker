@@ -1,4 +1,11 @@
-import { getAllCharacters, getCharacter, saveCharacterSnapshot, importLegacyCharacters } from "./db.js";
+import {
+  getAllCharacters,
+  getCharacter,
+  saveCharacterSnapshot,
+  getLatestSnapshot,
+  openTrackerDb,
+  importLegacyCharacters
+} from "./db.js";
 import {
   getSupabaseConfig,
   fetchTrackedJobs,
@@ -11,8 +18,14 @@ import {
 const ALARM_NAME = "janitorai-stats-refresh";
 const PERIOD_MINUTES = 1;
 
-const REQUIRED_STATS = ["msgs", "chats", "comments", "favourites"];
-const OPTIONAL_STATS = ["publishedChats"];
+export function cleanUuid(val) {
+  if (!val) return null;
+  const m = String(val).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return m ? m[0].toLowerCase() : null;
+}
+
+const REQUIRED_STATS = ["msgs", "chats"];
+const OPTIONAL_STATS = ["publishedChats", "comments", "favourites"];
 const LEGACY_MIGRATION_VERSION = 1;
 
 async function migrateLegacyStorage() {
@@ -111,6 +124,8 @@ export async function scrapeViaBackgroundTab(characterId, jobMetadata = null, cu
     console.debug("JStats: error querying existing tabs", e);
   }
 
+  const cleanId = cleanUuid(characterId) || characterId;
+
   // 2. Open temporary inactive background tab
   return new Promise((resolve) => {
     let tempTab = null;
@@ -118,6 +133,7 @@ export async function scrapeViaBackgroundTab(characterId, jobMetadata = null, cu
 
     const cleanup = () => {
       if (timeoutId) clearTimeout(timeoutId);
+      if (cleanId) pendingTabScrapes.delete(cleanId);
       pendingTabScrapes.delete(characterId);
       if (tempTab?.id) {
         chrome.tabs.remove(tempTab.id).catch(() => {});
@@ -132,10 +148,13 @@ export async function scrapeViaBackgroundTab(characterId, jobMetadata = null, cu
       resolve(null);
     }, timeoutDuration);
 
-    pendingTabScrapes.set(characterId, (snapshot) => {
+    const resolver = (snapshot) => {
       cleanup();
       resolve(snapshot);
-    });
+    };
+
+    if (cleanId) pendingTabScrapes.set(cleanId, resolver);
+    pendingTabScrapes.set(characterId, resolver);
 
     chrome.tabs.create({
       url: targetUrl,
@@ -258,29 +277,35 @@ export async function processAndSaveScrapedCharacter(cleanId, raw, jobMetadata =
 
   const charName = raw.name || raw.character_name || jobMetadata?.character_name || "JanitorAI Character";
   const msgsRaw =
+    raw.msgs ??
+    raw.messages ??
     raw.total_message ??
     raw.total_messages ??
     raw.totalMessages ??
     raw.totalMessage ??
+    raw.stats?.msgs ??
     raw.stats?.message ??
     raw.stats?.messages ??
-    raw.stats?.msgs ??
     raw.stats?.total_message ??
+    raw.stats?.total_messages ??
     raw.message;
 
   const chatsRaw =
+    raw.chats ??
     raw.total_chat ??
     raw.total_chats ??
     raw.totalChats ??
     raw.totalChat ??
-    raw.stats?.chat ??
     raw.stats?.chats ??
+    raw.stats?.chat ??
     raw.stats?.total_chat ??
+    raw.stats?.total_chats ??
     raw.chat ??
-    raw.chats ??
     raw.chat_count;
 
   const favsRaw =
+    raw.favourites ??
+    raw.favorites ??
     raw.total_favorite ??
     raw.total_favorites ??
     raw.total_favourite ??
@@ -289,29 +314,41 @@ export async function processAndSaveScrapedCharacter(cleanId, raw, jobMetadata =
     raw.stats?.favourite ??
     raw.stats?.favorites ??
     raw.stats?.favourites ??
-    raw.favourites ??
-    raw.favorites ??
     raw.favorite;
 
   const commsRaw =
+    raw.comments ??
+    raw.comment ??
     raw.total_comment ??
     raw.total_comments ??
     raw.stats?.comment ??
-    raw.stats?.comments ??
-    raw.comments ??
-    raw.comment;
+    raw.stats?.comments;
 
   const msgs = Number(msgsRaw);
   const chats = Number(chatsRaw);
-  const favourites = Number(favsRaw);
-  const comments = Number(commsRaw);
+  let favourites = Number(favsRaw);
+  let comments = Number(commsRaw);
 
   if (!Number.isFinite(msgs) || !Number.isFinite(chats) || (msgs === 0 && chats === 0)) {
     return null;
   }
 
+  let latestSnap = null;
+  if (!Number.isFinite(comments) || comments < 0 || !Number.isFinite(favourites) || favourites < 0) {
+    try {
+      latestSnap = await getLatestSnapshot(cleanId);
+    } catch {}
+  }
+
+  const resolvedComments = Number.isFinite(comments) && comments >= 0
+    ? comments
+    : (latestSnap && Number.isFinite(Number(latestSnap.comments)) ? Number(latestSnap.comments) : 0);
+  const resolvedFavs = Number.isFinite(favourites) && favourites >= 0
+    ? favourites
+    : (latestSnap && Number.isFinite(Number(latestSnap.favourites)) ? Number(latestSnap.favourites) : 0);
+
   const pubVal = raw.stats?.publishedChats ?? raw.stats?.published_chats ?? raw.publishedChats ?? raw.published_chats;
-  const publishedChats = pubVal != null ? Number(pubVal) : null;
+  const publishedChats = pubVal != null ? Number(pubVal) : (latestSnap?.publishedChats ?? null);
 
   const creator = raw.creator || raw.creator_name || raw.creator?.name || raw.creator_username || (typeof raw.creator === "string" ? raw.creator : null) || raw.user?.name || jobMetadata?.creator || null;
   const charMetadata = {
@@ -334,10 +371,10 @@ export async function processAndSaveScrapedCharacter(cleanId, raw, jobMetadata =
     chats,
     chatsDisplay: chats.toLocaleString(),
     chatMsgRatio: chats > 0 ? Number((msgs / chats).toFixed(3)) : null,
-    comments: Number.isFinite(comments) && comments >= 0 ? comments : 0,
-    commentsDisplay: (Number.isFinite(comments) && comments >= 0 ? comments : 0).toLocaleString(),
-    favourites: Number.isFinite(favourites) && favourites >= 0 ? favourites : 0,
-    favouritesDisplay: (Number.isFinite(favourites) && favourites >= 0 ? favourites : 0).toLocaleString(),
+    comments: resolvedComments,
+    commentsDisplay: resolvedComments.toLocaleString(),
+    favourites: resolvedFavs,
+    favouritesDisplay: resolvedFavs.toLocaleString(),
     publishedChats,
     publishedChatsDisplay: publishedChats != null ? publishedChats.toLocaleString() : null
   };
@@ -358,6 +395,26 @@ export async function processAndSaveScrapedCharacter(cleanId, raw, jobMetadata =
       last_scraped_at: snapshot.timestamp
     });
   }
+
+  // 4. Resolve pending background tab scrape if waiting
+  const resolver = pendingTabScrapes.get(cleanId);
+  if (resolver) {
+    pendingTabScrapes.delete(cleanId);
+    resolver(snapshot);
+  }
+
+  // 5. Broadcast SNAPSHOT_SAVED to all open tabs
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (tab.id) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: "SNAPSHOT_SAVED",
+          payload: { characterId: cleanId, snapshot }
+        }).catch(() => {});
+      }
+    }
+  } catch {}
 
   console.info(`JStats: Successfully saved snapshot for ${charName} (${cleanId})`, snapshot);
   return snapshot;
@@ -602,33 +659,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "SAVE_SNAPSHOT") {
     (async () => {
       const payload = message.payload;
-      if (!payload?.characterId) throw new Error("Missing character ID.");
+      const cleanId = cleanUuid(payload?.characterId) || characterIdFromUrl(payload?.characterId) || payload?.characterId;
+      if (!cleanId) throw new Error("Missing character ID.");
 
       const chatsVal = Number(payload.chats);
       const msgsVal = Number(payload.msgs);
+      if (!Number.isFinite(chatsVal) || !Number.isFinite(msgsVal)) {
+        return { ok: false, reason: "INVALID_CHATS_OR_MSGS" };
+      }
+
+      let commentsVal = Number(payload.comments);
+      let favouritesVal = Number(payload.favourites);
+      let latestSnap = null;
+
+      if (!Number.isFinite(commentsVal) || !Number.isFinite(favouritesVal)) {
+        try {
+          latestSnap = await getLatestSnapshot(cleanId);
+        } catch {}
+      }
+
+      if (!Number.isFinite(commentsVal)) {
+        commentsVal = (latestSnap && Number.isFinite(Number(latestSnap.comments))) ? Number(latestSnap.comments) : 0;
+      }
+      if (!Number.isFinite(favouritesVal)) {
+        favouritesVal = (latestSnap && Number.isFinite(Number(latestSnap.favourites))) ? Number(latestSnap.favourites) : 0;
+      }
+
       const snapshot = {
         timestamp: payload.timestamp || new Date().toISOString(),
-        msgs: payload.msgs,
-        msgsDisplay: payload.msgsDisplay ?? null,
-        chats: payload.chats,
-        chatsDisplay: payload.chatsDisplay ?? null,
+        characterId: cleanId,
+        msgs: msgsVal,
+        msgsDisplay: payload.msgsDisplay ?? msgsVal.toLocaleString(),
+        chats: chatsVal,
+        chatsDisplay: payload.chatsDisplay ?? chatsVal.toLocaleString(),
         chatMsgRatio: chatsVal > 0 ? Number((msgsVal / chatsVal).toFixed(3)) : null,
-        comments: payload.comments,
-        commentsDisplay: payload.commentsDisplay ?? null,
-        favourites: payload.favourites,
-        favouritesDisplay: payload.favouritesDisplay ?? null,
-        publishedChats: Number.isFinite(payload.publishedChats) ? payload.publishedChats : null,
+        comments: commentsVal,
+        commentsDisplay: payload.commentsDisplay ?? commentsVal.toLocaleString(),
+        favourites: favouritesVal,
+        favouritesDisplay: payload.favouritesDisplay ?? favouritesVal.toLocaleString(),
+        publishedChats: Number.isFinite(payload.publishedChats) ? payload.publishedChats : (latestSnap?.publishedChats ?? null),
         publishedChatsDisplay: payload.publishedChatsDisplay ?? null
       };
 
-      const allPresent = REQUIRED_STATS.every(key => Number.isFinite(snapshot[key]));
-      if (!allPresent) {
-        return { ok: false, reason: "INCOMPLETE_STATS" };
-      }
-
       await saveCharacterSnapshot(
         {
-          characterId: payload.characterId,
+          characterId: cleanId,
           characterName: payload.characterName,
           url: payload.url,
           avatar: payload.avatar || null,
@@ -641,19 +716,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
 
       // Forward to Supabase in real time
-      await insertSnapshot(payload.characterId, snapshot);
+      await insertSnapshot(cleanId, snapshot);
 
       // If metadata provided, update Supabase tracked job
       if (payload.avatar || payload.creator) {
-        updateTrackedJobMetadata(payload.characterId, {
+        updateTrackedJobMetadata(cleanId, {
           avatar: payload.avatar,
           creator: payload.creator
         }).catch(() => {});
       }
 
       // Resolve pending background tab scrape if waiting
-      if (pendingTabScrapes.has(payload.characterId)) {
-        const resolver = pendingTabScrapes.get(payload.characterId);
+      const resolver = pendingTabScrapes.get(cleanId) || pendingTabScrapes.get(payload.characterId);
+      if (resolver) {
+        if (cleanId) pendingTabScrapes.delete(cleanId);
+        pendingTabScrapes.delete(payload.characterId);
         resolver(snapshot);
       }
 
@@ -661,7 +738,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         const config = await getSupabaseConfig();
         if (config) {
-          fetch(`${config.url}/rest/v1/tracked_jobs?character_id=eq.${encodeURIComponent(payload.characterId)}`, {
+          fetch(`${config.url}/rest/v1/tracked_jobs?character_id=eq.${encodeURIComponent(cleanId)}`, {
             method: "PATCH",
             headers: {
               apikey: config.anonKey,
@@ -679,8 +756,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       const active = await chrome.storage.local.get("activeCharacterId");
       if (!active.activeCharacterId) {
-        await chrome.storage.local.set({ activeCharacterId: payload.characterId });
+        await chrome.storage.local.set({ activeCharacterId: cleanId });
       }
+
+      // Broadcast SNAPSHOT_SAVED to all open tabs
+      try {
+        const tabs = await chrome.tabs.query({});
+        for (const tab of tabs) {
+          if (tab.id) {
+            chrome.tabs.sendMessage(tab.id, {
+              type: "SNAPSHOT_SAVED",
+              payload: {
+                characterId: cleanId,
+                snapshot
+              }
+            }).catch(() => {});
+          }
+        }
+      } catch {}
 
       return { ok: true, snapshot };
     })()
@@ -745,7 +838,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // 4. TRIGGER_SCRAPE_NOW
   if (message?.type === "TRIGGER_SCRAPE_NOW") {
     (async () => {
-      const charId = message.payload?.characterId;
+      const rawId = message.payload?.characterId;
+      const charId = cleanUuid(rawId) || characterIdFromUrl(rawId) || rawId;
       if (!charId) throw new Error("Missing characterId");
       const snapshot = await scrapeCharacterById(charId);
       return { ok: true, snapshot };

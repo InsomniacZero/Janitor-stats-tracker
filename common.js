@@ -403,6 +403,12 @@ function bindChartTooltips(root = document) {
   });
 }
 
+function cleanUuid(val) {
+  if (!val) return null;
+  const m = String(val).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return m ? m[0].toLowerCase() : null;
+}
+
 export {
   STAT_CONFIG,
   TRACKED_SERIES,
@@ -421,7 +427,8 @@ export {
   enrichPoints,
   buildHourlyMarkers,
   makeTooltipMarkup,
-  bindChartTooltips
+  bindChartTooltips,
+  cleanUuid
 };
 
 if (typeof globalThis !== "undefined") {
@@ -443,7 +450,8 @@ if (typeof globalThis !== "undefined") {
     enrichPoints,
     buildHourlyMarkers,
     makeTooltipMarkup,
-    bindChartTooltips
+    bindChartTooltips,
+    cleanUuid
   });
 }
 

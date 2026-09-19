@@ -118,21 +118,96 @@ function normalizeSnapshots(snaps) {
   });
 }
 
+function cleanUuid(val) {
+  if (!val) return null;
+  const m = String(val).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return m ? m[0].toLowerCase() : null;
+}
+
 async function loadSnapshotsForCharacter(characterId) {
   if (!characterId) return [];
-  let snaps = [];
+  const cleanId = cleanUuid(characterId) || characterId;
+  let localSnaps = [];
+  let cloudSnaps = [];
+
+  // 1. Fetch from local IndexedDB
+  try {
+    localSnaps = await getSnapshots(characterId);
+    if ((!localSnaps || localSnaps.length === 0) && cleanId !== characterId) {
+      localSnaps = await getSnapshots(cleanId);
+    }
+  } catch (e) {
+    console.warn("Failed to fetch local snapshots from IndexedDB", e);
+  }
+
+  // 2. Fetch from Supabase if configured
   const config = await getSupabaseConfig();
   if (config) {
     try {
-      snaps = await fetchCharacterSnapshots(characterId);
+      cloudSnaps = await fetchCharacterSnapshots(cleanId);
+      if ((!cloudSnaps || cloudSnaps.length === 0) && cleanId !== characterId) {
+        cloudSnaps = await fetchCharacterSnapshots(characterId);
+      }
     } catch (e) {
-      console.warn("Failed to fetch snapshots from Supabase, falling back to local DB", e);
+      console.warn("Failed to fetch snapshots from Supabase", e);
     }
   }
-  if (!snaps || snaps.length === 0) {
-    snaps = await getSnapshots(characterId);
+
+  // 3. Merge snapshots by timestamp (deduplicate)
+  const map = new Map();
+
+  // Cloud snapshots first
+  for (const s of (cloudSnaps || [])) {
+    if (s && s.timestamp) {
+      map.set(s.timestamp, s);
+    }
   }
-  return normalizeSnapshots(snaps || []);
+
+  // Local snapshots take precedence or enrich cloud snapshots
+  const localOnlyToSync = [];
+  for (const s of (localSnaps || [])) {
+    if (!s || !s.timestamp) continue;
+    if (!map.has(s.timestamp)) {
+      map.set(s.timestamp, s);
+      if (config) {
+        localOnlyToSync.push(s);
+      }
+    } else {
+      const existing = map.get(s.timestamp);
+      map.set(s.timestamp, { ...existing, ...s });
+    }
+  }
+
+  // Backfill local-only snapshots to Supabase in background so cloud stays in sync
+  if (config && localOnlyToSync.length > 0) {
+    (async () => {
+      for (const s of localOnlyToSync) {
+        try {
+          await insertSnapshot(cleanId, s);
+        } catch {}
+      }
+    })().catch(() => {});
+  }
+
+  // Cache any cloud-only snapshots locally in IndexedDB
+  const localTimestamps = new Set((localSnaps || []).map(s => s.timestamp));
+  const cloudOnlyToSave = (cloudSnaps || []).filter(s => s && s.timestamp && !localTimestamps.has(s.timestamp));
+  if (cloudOnlyToSave.length > 0) {
+    (async () => {
+      const char = getCurrent() || { characterId: cleanId };
+      for (const s of cloudOnlyToSave) {
+        try {
+          await saveCharacterSnapshot(char, s);
+        } catch {}
+      }
+    })().catch(() => {});
+  }
+
+  const allMerged = Array.from(map.values()).sort((a, b) =>
+    new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+
+  return normalizeSnapshots(allMerged);
 }
 
 function pointTooltip(label, point, unit = "") {
@@ -1035,15 +1110,56 @@ function renderTrackingCountdown() {
 
 let isExtensionDetected = isExtension;
 
-// Bridge listener for Chrome Extension presence
-window.addEventListener("message", (event) => {
-  if (event.data?.source === "JSTATS_EXTENSION" && event.data?.active) {
-    if (!isExtensionDetected) {
+async function handleIncomingSnapshot(characterId, newSnapshot) {
+  if (!newSnapshot) return;
+  const current = getCurrent();
+  const currentCharId = current?.characterId;
+  const cleanIncoming = cleanUuid(characterId) || characterId;
+  const cleanCurrent = cleanUuid(currentCharId) || currentCharId;
+
+  if (cleanIncoming && cleanCurrent && cleanIncoming === cleanCurrent) {
+    const exists = state.snapshots.some(s => s.timestamp === newSnapshot.timestamp);
+    if (!exists) {
+      const normalized = normalizeSnapshots([newSnapshot])[0];
+      state.snapshots.push(normalized);
+      state.snapshots.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      await render();
+      showToast(`Logged live snapshot for ${current?.characterName || 'character'}!`, "info");
+    }
+  }
+}
+
+// Bridge listener for Chrome Extension presence and live snapshots
+window.addEventListener("message", async (event) => {
+  if (event.data?.source === "JSTATS_EXTENSION") {
+    if (event.data.active && !isExtensionDetected) {
       isExtensionDetected = true;
       updateScraperStatusUI();
     }
+    if (event.data.type === "SNAPSHOT_SAVED") {
+      const { characterId, snapshot } = event.data.payload || {};
+      await handleIncomingSnapshot(characterId, snapshot);
+    }
+    if (event.data.type === "TRIGGER_SCRAPE_RESPONSE") {
+      const char = getCurrent();
+      if (char) {
+        state.snapshots = await loadSnapshotsForCharacter(char.characterId);
+        await render();
+      }
+    }
   }
 });
+
+try {
+  if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+    chrome.runtime.onMessage.addListener(async (message) => {
+      if (message?.type === "SNAPSHOT_SAVED") {
+        const { characterId, snapshot } = message.payload || {};
+        await handleIncomingSnapshot(characterId, snapshot);
+      }
+    });
+  }
+} catch {}
 
 // Periodically ping extension bridge
 setInterval(() => {
@@ -1104,13 +1220,14 @@ function updateScraperStatusUI() {
           }, "*");
         }
         setTimeout(async () => {
+          state.snapshots = await loadSnapshotsForCharacter(char.characterId);
           await render();
           triggerBtn.disabled = false;
           triggerBtn.innerHTML = `
             <svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
             <span>Scrape Now</span>
           `;
-        }, 2500);
+        }, 2200);
       };
     }
     return;
@@ -1824,6 +1941,14 @@ async function handleManualEntrySubmit(e) {
   };
 
   await saveCharacterSnapshot(character, snapshot);
+  try {
+    const config = await getSupabaseConfig();
+    if (config) {
+      await insertSnapshot(id, snapshot);
+    }
+  } catch (e) {
+    console.warn("Failed to push manual snapshot to Supabase", e);
+  }
   await storage.set({ activeCharacterId: id });
   closeEntryModal();
   await load();
@@ -1861,35 +1986,52 @@ async function processCsvFile(file) {
       return record;
     };
 
-    const header = parseCsvLine(lines[0]).map(h => h.toLowerCase().trim());
-    const charName = file.name.replace(/-stats\.csv$/i, "").replace(/[_-]/g, " ") || "Imported Character";
-    const charId = "imported-" + charName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-
-    let importedCount = 0;
-    let charMetadata = {
-      characterId: charId,
-      characterName: charName,
-      url: "",
-      createdAt: null,
-      updatedAt: null,
-      publishedAt: null
-    };
-
+    const headers = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase().replace(/\s+/g, "_"));
+    const rows = [];
     for (let i = 1; i < lines.length; i++) {
-      const cols = parseCsvLine(lines[i]);
-      if (cols.length < 5) continue;
+      const values = parseCsvLine(lines[i]);
+      if (values.length < 2) continue;
       const row = {};
-      header.forEach((h, idx) => { row[h] = cols[idx]; });
+      headers.forEach((h, idx) => {
+        row[h] = values[idx] ? values[idx].trim() : "";
+      });
+      rows.push(row);
+    }
 
-      const timestamp = row.timestamp || new Date(Date.now() - (lines.length - i) * 3600000).toISOString();
-      const msgs = Number(row.messages || row.msgs);
-      const chats = Number(row.chats);
-      const comments = Number(row.comments);
-      const favourites = Number(row.favourites || row.favorites);
-      const publishedChats = row.publishedchats ? Number(row.publishedchats) : null;
+    let charId = null;
+    let charName = null;
+    let importedCount = 0;
+    const config = await getSupabaseConfig();
+
+    for (const row of rows) {
+      const msgs = Number(row.msgs || row.messages || row.total_messages || row.total_message);
+      const chats = Number(row.chats || row.total_chats || row.total_chat);
+      const comments = Number(row.comments || row.total_comments || 0);
+      const favourites = Number(row.favourites || row.favorites || row.total_favorites || 0);
+      const publishedChats = row.published_chats || row.publishedchats ? Number(row.published_chats || row.publishedchats) : null;
+      const timestamp = row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString();
+
+      if (!charId) {
+        charId = row.character_id || row.characterid || row.id || (file.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_"));
+      }
+      if (!charName) {
+        charName = row.character_name || row.charactername || row.name || charId;
+      }
+
+      const charMetadata = {
+        characterId: charId,
+        characterName: charName,
+        url: row.url || `https://janitorai.com/characters/${charId}`,
+        avatar: row.avatar || null,
+        creator: row.creator || null,
+        createdAt: row.created_at || row.createdat || null,
+        updatedAt: row.updated_at || row.updatedat || null,
+        publishedAt: row.published_at || row.publishedat || null,
+        publishedChats
+      };
 
       if (row.createdat && !charMetadata.createdAt) charMetadata.createdAt = row.createdat;
-      if (row.updatedat) charMetadata.updatedAt = row.updatedat;
+      if (row.updatedat && !charMetadata.updatedAt) charMetadata.updatedAt = row.updatedat;
       if (row.publishedat && !charMetadata.publishedAt) charMetadata.publishedAt = row.publishedat;
 
       if (![msgs, chats, comments, favourites].every(Number.isFinite)) continue;
@@ -1910,6 +2052,11 @@ async function processCsvFile(file) {
       };
 
       await saveCharacterSnapshot(charMetadata, snapshot);
+      if (config) {
+        try {
+          await insertSnapshot(charId, snapshot);
+        } catch {}
+      }
       importedCount++;
     }
 

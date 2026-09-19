@@ -147,25 +147,28 @@
     if (typeof obj !== "object") return results;
 
     const msgsRaw =
+      obj.msgs ??
+      obj.messages ??
       obj.total_message ??
       obj.total_messages ??
       obj.totalMessages ??
       obj.totalMessage ??
+      obj.stats?.msgs ??
       obj.stats?.message ??
       obj.stats?.messages ??
-      obj.stats?.msgs ??
       obj.stats?.total_message ??
       obj.stats?.total_messages ??
       obj.message_count ??
       obj.messageCount;
 
     const chatsRaw =
+      obj.chats ??
       obj.total_chat ??
       obj.total_chats ??
       obj.totalChats ??
       obj.totalChat ??
-      obj.stats?.chat ??
       obj.stats?.chats ??
+      obj.stats?.chat ??
       obj.stats?.total_chat ??
       obj.stats?.total_chats ??
       obj.chat_count ??

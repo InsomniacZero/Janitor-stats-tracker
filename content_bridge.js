@@ -60,10 +60,14 @@
     }
   });
 
-  // Listen for messages pushed from background (e.g. real reviews scraped on JanitorAI)
+  // Listen for messages pushed from background (e.g. real reviews, snapshots scraped on JanitorAI)
   try {
     chrome.runtime.onMessage.addListener((message) => {
-      if (message?.type === "REVIEWS_SYNCED" || message?.type === "BOT_DETAILS_RESOLVED") {
+      if (
+        message?.type === "REVIEWS_SYNCED" ||
+        message?.type === "BOT_DETAILS_RESOLVED" ||
+        message?.type === "SNAPSHOT_SAVED"
+      ) {
         window.postMessage({
           source: "JSTATS_EXTENSION",
           type: message.type,

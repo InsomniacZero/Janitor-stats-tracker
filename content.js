@@ -300,25 +300,28 @@ function inspectStatsObject(obj, depth = 0) {
   if (!obj || typeof obj !== "object" || depth > 4) return null;
 
   const msgsRaw =
+    obj.msgs ??
+    obj.messages ??
     obj.total_message ??
     obj.total_messages ??
     obj.totalMessages ??
     obj.totalMessage ??
+    obj.stats?.msgs ??
     obj.stats?.message ??
     obj.stats?.messages ??
-    obj.stats?.msgs ??
     obj.stats?.total_message ??
     obj.stats?.total_messages ??
     obj.message_count ??
     obj.messageCount;
 
   const chatsRaw =
+    obj.chats ??
     obj.total_chat ??
     obj.total_chats ??
     obj.totalChats ??
     obj.totalChat ??
-    obj.stats?.chat ??
     obj.stats?.chats ??
+    obj.stats?.chat ??
     obj.stats?.total_chat ??
     obj.stats?.total_chats ??
     obj.chat_count ??
@@ -592,7 +595,19 @@ async function extractStats() {
 }
 
 function statsAreComplete(stats) {
-  return REQUIRED_STATS.every(key => Number.isFinite(stats[key]));
+  if (!stats) return false;
+  const hasMsgs = Number.isFinite(stats.msgs);
+  const hasChats = Number.isFinite(stats.chats);
+  if (!hasMsgs || !hasChats) return false;
+  if (!Number.isFinite(stats.comments)) {
+    stats.comments = 0;
+    stats.commentsDisplay = stats.commentsDisplay || "0";
+  }
+  if (!Number.isFinite(stats.favourites)) {
+    stats.favourites = 0;
+    stats.favouritesDisplay = stats.favouritesDisplay || "0";
+  }
+  return true;
 }
 
 async function sendSnapshot(stats) {
