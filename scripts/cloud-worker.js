@@ -38,6 +38,34 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function extractTokenFromString(str) {
+  if (!str || typeof str !== "string") return null;
+  const clean = str.trim().replace(/^base64-/, "");
+
+  try {
+    const o = JSON.parse(str);
+    const tok = o?.access_token || o?.accessToken || (Array.isArray(o) && o[0]?.access_token) || o?.currentSession?.access_token;
+    if (tok && typeof tok === "string" && tok.startsWith("ey")) return tok;
+  } catch {}
+
+  try {
+    const decoded = Buffer.from(clean, "base64").toString("utf-8");
+    if (decoded.startsWith("ey") && decoded.split(".").length === 3) return decoded;
+    try {
+      const o = JSON.parse(decoded);
+      const tok = o?.access_token || o?.accessToken || (Array.isArray(o) && o[0]?.access_token) || o?.currentSession?.access_token;
+      if (tok && typeof tok === "string" && tok.startsWith("ey")) return tok;
+    } catch {}
+    const m = decoded.match(/(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})/);
+    if (m) return m[1];
+  } catch {}
+
+  const m = str.match(/(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})/);
+  if (m) return m[1];
+
+  return null;
+}
+
 function extractCharactersFromPayload(obj, depth = 0, seen = new Set()) {
   if (!obj || typeof obj !== "object" || depth > 5) return [];
   const results = [];
@@ -339,6 +367,14 @@ async function runWorker() {
     }
     if (cookiesToAdd.length) {
       await context.addCookies(cookiesToAdd);
+    }
+
+    const extractedToken = extractTokenFromString(JANITOR_TOKEN) || extractTokenFromString(JANITOR_COOKIE);
+    if (extractedToken) {
+      console.log("Extracted valid JanitorAI session JWT. Applying Bearer authorization header...");
+      await context.setExtraHTTPHeaders({
+        Authorization: `Bearer ${extractedToken}`
+      });
     }
   }
 
