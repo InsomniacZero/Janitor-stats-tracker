@@ -45,8 +45,8 @@ function makePopupChart(title, color, sourcePoints) {
   const yMax = max === min ? max + range : max;
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
-  const x = i => sampled.length <= 1 ? pad.left + innerW / 2 : pad.left + i / (sampled.length - 1) * innerW;
-  const y = value => pad.top + (1 - (value - yMin) / (yMax - yMin || 1)) * innerH;
+  const x = i => sampled.length <= 1 ? pad.left + innerW / 2 : pad.left + (Math.max(0, Math.min(i, sampled.length - 1)) / (sampled.length - 1)) * innerW;
+  const y = value => pad.top + Math.max(0, Math.min(1, 1 - (value - yMin) / (yMax - yMin || 1))) * innerH;
   const grid = [0,.25,.5,.75,1].map(t => {
     const yy = pad.top + t * innerH;
     const value = yMax - t * (yMax - yMin);
@@ -68,6 +68,8 @@ function makePopupChart(title, color, sourcePoints) {
     return { cx, cy, tooltipHtml };
   });
 
+  const clipId = `clip_pop_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+
   const { hourDots, edgeMarks, hourLines } = buildHourlyMarkers({
     sampled,
     valid,
@@ -79,7 +81,7 @@ function makePopupChart(title, color, sourcePoints) {
     color
   });
 
-  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${escapeHtml(JSON.stringify(pointsData))}" role="img" aria-label="${escapeHtml(title)} graph">${grid}${hourLines}<path class="chart-line" d="${path.trim()}" stroke="${color}"/>${hourDots}${edgeMarks}<line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" /><circle class="chart-active-dot" cx="0" cy="0" r="4" fill="${color}" stroke="#181715" stroke-width="2" style="display: none;" /></svg><div class="chart-tooltip" role="status"></div>`;
+  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${escapeHtml(JSON.stringify(pointsData))}" role="img" aria-label="${escapeHtml(title)} graph"><defs><clipPath id="${clipId}"><rect x="${pad.left}" y="${pad.top}" width="${innerW}" height="${innerH}" /></clipPath></defs>${grid}${hourLines}<path class="chart-line" clip-path="url(#${clipId})" d="${path.trim()}" stroke="${color}"/>${hourDots}${edgeMarks}<line class="chart-crosshair" clip-path="url(#${clipId})" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" /><circle class="chart-active-dot" cx="0" cy="0" r="4" fill="${color}" stroke="#181715" stroke-width="2" style="display: none;" /></svg><div class="chart-tooltip" role="status"></div>`;
 }
 
 function makePopupCombined(snapshots) {
@@ -90,12 +92,12 @@ function makePopupCombined(snapshots) {
     const values = snapshots.map((p, index) => ({ timestamp: p.timestamp, value: Number.isFinite(p[seriesInfo.key]) ? p[seriesInfo.key] : NaN, originalIndex: index }));
     const sanitized = sanitizeTransientZeroes(values);
     const baseline = sanitized.find(p => Number.isFinite(p.value) && p.value > 0)?.value;
-    return { ...seriesInfo, points: sampled.map(p => {
+    return { ...seriesInfo, points: sampled.map((p, sIdx) => {
       const actual = sanitized[p.originalIndex]?.value;
       const prev = p.originalIndex > 0 ? sanitized[p.originalIndex - 1]?.value : null;
       const delta = prev == null || !Number.isFinite(actual) ? null : actual - prev;
       const percent = prev == null || prev === 0 || !Number.isFinite(actual) ? null : delta / prev * 100;
-      return { timestamp: p.timestamp, actual, value: baseline && Number.isFinite(actual) ? actual / baseline * 100 : NaN, delta, percent, elapsedMs: p.originalIndex > 0 ? new Date(p.timestamp).getTime() - new Date(snapshots[p.originalIndex-1].timestamp).getTime() : null, originalIndex: p.originalIndex };
+      return { timestamp: p.timestamp, actual, value: baseline && Number.isFinite(actual) ? actual / baseline * 100 : NaN, delta, percent, elapsedMs: p.originalIndex > 0 ? new Date(p.timestamp).getTime() - new Date(snapshots[p.originalIndex-1].timestamp).getTime() : null, originalIndex: p.originalIndex, sampleIndex: sIdx };
     }) };
   });
   const all = series.flatMap(s => s.points.map(p => p.value)).filter(Number.isFinite);
@@ -103,13 +105,13 @@ function makePopupCombined(snapshots) {
   const min = Math.min(...all), max = Math.max(...all), spread = Math.max(1, max-min);
   const yMin = Math.max(0, min - spread*.12), yMax = max + spread*.12;
   const innerW = width-pad.left-pad.right, innerH = height-pad.top-pad.bottom;
-  const x = i => sampled.length <= 1 ? pad.left+innerW/2 : pad.left+i/(sampled.length-1)*innerW;
-  const y = v => pad.top+(1-(v-yMin)/(yMax-yMin||1))*innerH;
+  const x = i => sampled.length <= 1 ? pad.left+innerW/2 : pad.left+(Math.max(0, Math.min(i, sampled.length - 1))/(sampled.length-1))*innerW;
+  const y = v => pad.top+Math.max(0, Math.min(1, 1-(v-yMin)/(yMax-yMin||1)))*innerH;
   let svg=[0,.25,.5,.75,1].map(t=>{const yy=pad.top+t*innerH; const value=yMax-t*(yMax-yMin); return `<line class="gridline" x1="${pad.left}" y1="${yy}" x2="${width-pad.right}" y2="${yy}"/><text class="axis-label" x="${pad.left-8}" y="${yy+3}" text-anchor="end">${Math.round(value)}</text>`;}).join("");
   for(const s of series){
     let path="",started=false;
-    s.points.forEach((p,i)=>{ if(!Number.isFinite(p.value)){started=false;return;} path += `${started?'L':'M'}${x(i).toFixed(2)} ${y(p.value).toFixed(2)} `; started=true; });
-    svg += `<path class="chart-line" stroke="${s.color}" d="${path.trim()}"/>`;
+    s.points.forEach((p,i)=>{ if(!Number.isFinite(p.value)){started=false;return;} const sampleIndex = typeof p.sampleIndex === "number" ? p.sampleIndex : i; path += `${started?'L':'M'}${x(sampleIndex).toFixed(2)} ${y(p.value).toFixed(2)} `; started=true; });
+    svg += `<path class="chart-line" clip-path="url(#clip_pop_combined)" stroke="${s.color}" d="${path.trim()}"/>`;
   }
   const pointsData = sampled.map((sPoint, sIdx) => {
     const cx = x(sIdx);
@@ -137,7 +139,7 @@ function makePopupCombined(snapshots) {
     color: "#d97757"
   });
 
-  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${escapeHtml(JSON.stringify(pointsData))}" role="img" aria-label="Combined trend graph">${svg}${hourLines}${edgeMarks}<line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" /><circle class="chart-active-dot" cx="0" cy="0" r="4" fill="#d97757" stroke="#181715" stroke-width="2" style="display: none;" /></svg><div class="chart-tooltip" role="status"></div><div class="legend">${TRACKED_SERIES.map(s=>`<span class="legend-item"><span class="legend-dot" style="background:${s.color}"></span>${escapeHtml(s.short)}</span>`).join("")}</div>`;
+  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${escapeHtml(JSON.stringify(pointsData))}" role="img" aria-label="Combined trend graph"><defs><clipPath id="clip_pop_combined"><rect x="${pad.left}" y="${pad.top}" width="${innerW}" height="${innerH}" /></clipPath></defs>${svg}${hourLines}${edgeMarks}<line class="chart-crosshair" clip-path="url(#clip_pop_combined)" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" /><circle class="chart-active-dot" cx="0" cy="0" r="4" fill="#d97757" stroke="#181715" stroke-width="2" style="display: none;" /></svg><div class="chart-tooltip" role="status"></div><div class="legend">${TRACKED_SERIES.map(s=>`<span class="legend-item"><span class="legend-dot" style="background:${s.color}"></span>${escapeHtml(s.short)}</span>`).join("")}</div>`;
 }
 
 function renderRangeControls() {

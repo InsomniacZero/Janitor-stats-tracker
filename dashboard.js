@@ -139,16 +139,17 @@ function pointTooltip(label, point, unit = "") {
   return makeTooltipMarkup({ label, point, suffix: unit });
 }
 
-function chartPath(valid, xFor, yFor) {
+function chartPath(points, xFor, yFor) {
   let path = "";
   let started = false;
-  valid.forEach((point) => {
+  points.forEach((point, index) => {
     if (!Number.isFinite(point.value)) {
       started = false;
       return;
     }
     const command = started ? "L" : "M";
-    path += `${command}${xFor(point.sampleIndex).toFixed(2)} ${yFor(point.value).toFixed(2)} `;
+    const xCoord = typeof point.sampleIndex === "number" ? xFor(point.sampleIndex) : xFor(index);
+    path += `${command}${xCoord.toFixed(2)} ${yFor(point.value).toFixed(2)} `;
     started = true;
   });
   return path.trim();
@@ -158,9 +159,9 @@ function makeSvgChart(title, color, sourcePoints, maxPoints = 800) {
   const width = 820;
   const height = 290;
   const pad = { left: 60, right: 18, top: 18, bottom: 40 };
-  const points = sourcePoints.map((p, index) => ({ ...p, sampleIndex: index }));
+  const points = sourcePoints.map((p, index) => ({ ...p, originalIndex: index }));
   const sanitized = sanitizeTransientZeroes(points);
-  const sampled = downsample(sanitized, maxPoints).map((p, index) => ({ ...p, sampleIndex: p.originalIndex ?? index }));
+  const sampled = downsample(sanitized, maxPoints).map((p, index) => ({ ...p, sampleIndex: index }));
   const valid = sampled.filter(p => Number.isFinite(p.value));
   if (!valid.length) return `<div class="empty">No usable data in this window.</div>`;
 
@@ -171,8 +172,8 @@ function makeSvgChart(title, color, sourcePoints, maxPoints = 800) {
   const yMax = max === min ? max + range : max;
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
-  const x = i => sampled.length <= 1 ? pad.left + innerW / 2 : pad.left + i / (sampled.length - 1) * innerW;
-  const y = value => pad.top + (1 - (value - yMin) / (yMax - yMin || 1)) * innerH;
+  const x = i => sampled.length <= 1 ? pad.left + innerW / 2 : pad.left + (Math.max(0, Math.min(i, sampled.length - 1)) / (sampled.length - 1)) * innerW;
+  const y = value => pad.top + Math.max(0, Math.min(1, 1 - (value - yMin) / (yMax - yMin || 1))) * innerH;
 
   const grid = [0, .25, .5, .75, 1].map(t => {
     const yy = pad.top + t * innerH;
@@ -206,6 +207,7 @@ function makeSvgChart(title, color, sourcePoints, maxPoints = 800) {
   const lastLabel = new Date(sampled.at(-1).timestamp).toLocaleString([], { month: "short", day: "numeric" });
 
   const gradientId = `grad_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+  const clipId = `clip_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
 
   const { hourDots, edgeMarks, hourLines } = buildHourlyMarkers({
     sampled,
@@ -225,14 +227,17 @@ function makeSvgChart(title, color, sourcePoints, maxPoints = 800) {
           <stop offset="0%" stop-color="${color}" stop-opacity="0.28" />
           <stop offset="100%" stop-color="${color}" stop-opacity="0.0" />
         </linearGradient>
+        <clipPath id="${clipId}">
+          <rect x="${pad.left}" y="${pad.top}" width="${innerW}" height="${innerH}" />
+        </clipPath>
       </defs>
       ${grid}
       ${hourLines}
-      ${areaPath ? `<path class="chart-area" d="${areaPath}" fill="url(#${gradientId})" />` : ""}
-      <path class="chart-line" d="${linePath}" stroke="${color}" />
+      ${areaPath ? `<path class="chart-area" clip-path="url(#${clipId})" d="${areaPath}" fill="url(#${gradientId})" />` : ""}
+      <path class="chart-line" clip-path="url(#${clipId})" d="${linePath}" stroke="${color}" />
       ${hourDots}
       ${edgeMarks}
-      <line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" />
+      <line class="chart-crosshair" clip-path="url(#${clipId})" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" />
       <circle class="chart-active-dot" cx="0" cy="0" r="4.5" fill="${color}" stroke="#181715" stroke-width="2" style="display: none;" />
       <text class="axis-label" x="${pad.left}" y="${height - 12}">${escapeHtml(firstLabel)}</text>
       <text class="axis-label" x="${width - pad.right}" y="${height - 12}" text-anchor="end">${escapeHtml(lastLabel)}</text>
@@ -247,7 +252,7 @@ function makeCombinedChart(snapshots) {
   const height = 320;
   const pad = { left: 58, right: 18, top: 20, bottom: 40 };
   const sampledBase = downsample(snapshots.map((p, index) => ({ ...p, originalIndex: index })), 800);
-  const sampled = sampledBase.map(p => ({ ...p, sampleIndex: snapshots.indexOf(p) }));
+  const sampled = sampledBase.map((p, index) => ({ ...p, sampleIndex: index }));
 
   const series = TRACKED_SERIES.map(seriesInfo => {
     const raw = snapshots.map((p, index) => ({ timestamp: p.timestamp, actual: p[seriesInfo.key], value: Number.isFinite(p[seriesInfo.key]) ? p[seriesInfo.key] : NaN, originalIndex: index }));
@@ -256,7 +261,7 @@ function makeCombinedChart(snapshots) {
     const baseline = baselinePoint?.value;
     return {
       ...seriesInfo,
-      points: sampled.map(p => {
+      points: sampled.map((p, sIdx) => {
         const rawPoint = sanitized[p.originalIndex] || {};
         const actual = rawPoint.value;
         const previousSnapshot = p.originalIndex > 0 ? sanitized[p.originalIndex - 1] : null;
@@ -269,7 +274,8 @@ function makeCombinedChart(snapshots) {
           delta,
           percent: previousValue == null || previousValue === 0 || !Number.isFinite(actual) ? null : (delta / previousValue) * 100,
           elapsedMs: p.originalIndex > 0 ? new Date(p.timestamp).getTime() - new Date(snapshots[p.originalIndex - 1].timestamp).getTime() : null,
-          originalIndex: p.originalIndex
+          originalIndex: p.originalIndex,
+          sampleIndex: sIdx
         };
       })
     };
@@ -283,8 +289,8 @@ function makeCombinedChart(snapshots) {
   const yMax = max + spread * 0.12;
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
-  const x = i => sampled.length <= 1 ? pad.left + innerW / 2 : i / (sampled.length - 1) * innerW + pad.left;
-  const y = value => pad.top + (1 - (value - yMin) / (yMax - yMin || 1)) * innerH;
+  const x = i => sampled.length <= 1 ? pad.left + innerW / 2 : pad.left + (Math.max(0, Math.min(i, sampled.length - 1)) / (sampled.length - 1)) * innerW;
+  const y = value => pad.top + Math.max(0, Math.min(1, 1 - (value - yMin) / (yMax - yMin || 1))) * innerH;
 
   let grid = [0, .25, .5, .75, 1].map(t => {
     const yy = pad.top + t * innerH;
@@ -298,12 +304,12 @@ function makeCombinedChart(snapshots) {
     let path = "";
     let started = false;
     valid.forEach(point => {
-      const sampleIndex = sampled.findIndex(p => p.originalIndex === point.originalIndex);
+      const sampleIndex = typeof point.sampleIndex === "number" ? point.sampleIndex : sampled.findIndex(p => p.originalIndex === point.originalIndex);
       const command = started ? "L" : "M";
       path += `${command}${x(sampleIndex).toFixed(2)} ${y(point.value).toFixed(2)} `;
       started = true;
     });
-    linesSvg += `<path class="chart-line" d="${path.trim()}" stroke="${seriesInfo.color}"/>`;
+    linesSvg += `<path class="chart-line" clip-path="url(#clip_combined)" d="${path.trim()}" stroke="${seriesInfo.color}"/>`;
   });
 
   // Build multi-series snapshot points data for crosshair
@@ -360,11 +366,16 @@ function makeCombinedChart(snapshots) {
 
   return `
     <svg class="chart-svg" viewBox="0 0 ${width} ${height}" data-points="${serializedPoints}" role="img" aria-label="Combined normalized trend graph">
+      <defs>
+        <clipPath id="clip_combined">
+          <rect x="${pad.left}" y="${pad.top}" width="${innerW}" height="${innerH}" />
+        </clipPath>
+      </defs>
       ${grid}
       ${hourLines}
       ${linesSvg}
       ${edgeMarks}
-      <line class="chart-crosshair" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" />
+      <line class="chart-crosshair" clip-path="url(#clip_combined)" x1="0" y1="${pad.top}" x2="0" y2="${height - pad.bottom}" style="display: none;" />
       <circle class="chart-active-dot" cx="0" cy="0" r="4.5" fill="#d97757" stroke="#181715" stroke-width="2" style="display: none;" />
     </svg>
     <div class="chart-tooltip" role="status"></div>

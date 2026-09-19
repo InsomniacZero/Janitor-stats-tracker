@@ -811,7 +811,7 @@ select.select:focus {
   display: block;
   width: 100%;
   height: 270px;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .gridline {
