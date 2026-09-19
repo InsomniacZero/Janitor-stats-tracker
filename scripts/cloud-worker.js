@@ -332,18 +332,39 @@ async function scrapeCharacterPage(page, characterId, authToken = "") {
           }
         }
 
-        // C. Check leaf element text (e.g. 1.6k, 14k badges under character title)
-        const leafEls = Array.from(document.querySelectorAll("p, span, div, b, strong"))
-          .filter(el => el.children.length === 0 && el.innerText && el.innerText.trim());
+        // C. Check stats elements & badges (using textContent for headless reliability)
+        const statsElements = Array.from(document.querySelectorAll("p, span, div, button, b, strong"))
+          .filter(el => el.children.length === 0 && el.textContent && el.textContent.trim());
 
-        const statCandidates = [];
-        for (const el of leafEls) {
-          const t = el.innerText.trim();
-          if (/^[\d.,]+[kmb]?$/i.test(t)) {
-            const num = parseStat(t);
-            if (num !== null) {
-              statCandidates.push(num);
+        let domChats = null;
+        let domMsgs = null;
+
+        for (let i = 0; i < statsElements.length; i++) {
+          const el = statsElements[i];
+          const val = parseStat(el.textContent);
+          if (val !== null) {
+            const prev = statsElements[i - 1]?.textContent?.toLowerCase() || "";
+            const next = statsElements[i + 1]?.textContent?.toLowerCase() || "";
+            const parent = (el.parentElement?.textContent || "").toLowerCase();
+            
+            if (domChats === null && (parent.includes("chat") || prev.includes("chat") || next.includes("chat"))) {
+              domChats = val;
+            } else if (domMsgs === null && (parent.includes("msg") || parent.includes("message") || prev.includes("msg") || next.includes("msg"))) {
+              domMsgs = val;
             }
+          }
+        }
+
+        // Fallback: If both chats and msgs are numbers found in order near the title
+        if (domChats === null || domMsgs === null) {
+          const numbers = [];
+          for (const el of statsElements) {
+            const val = parseStat(el.textContent);
+            if (val !== null && val > 0) numbers.push(val);
+          }
+          if (numbers.length >= 2) {
+            if (domChats === null) domChats = numbers[0];
+            if (domMsgs === null) domMsgs = numbers[1];
           }
         }
 
@@ -351,16 +372,16 @@ async function scrapeCharacterPage(page, characterId, authToken = "") {
         const favDisplay = favBtn?.parentElement?.querySelector('[class*="_number_"]')?.textContent;
         const favCount = favDisplay ? parseStat(favDisplay) : null;
 
-        if (statCandidates.length >= 2) {
+        if (domChats !== null && domMsgs !== null) {
           return {
             characterId: cid,
             character_name: h1,
             avatar: avatarEl?.src || null,
             creator,
-            chats: statCandidates[0],
-            msgs: statCandidates[1],
-            favourites: favCount ?? (statCandidates.length >= 3 ? statCandidates[2] : null),
-            comments: statCandidates.length >= 4 ? statCandidates[3] : null,
+            chats: domChats,
+            msgs: domMsgs,
+            favourites: favCount,
+            comments: null,
             publishedChats: null
           };
         }
@@ -530,11 +551,18 @@ async function runWorker() {
   const context = await browser.newContext({
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     viewport: { width: 1920, height: 1080 },
-    locale: "en-US"
+    locale: "en-US",
+    extraHTTPHeaders: {
+      "Accept-Language": "en-US,en;q=0.9",
+      "sec-ch-ua": "\"Chromium\";v=\"128\", \"Not;A=Brand\";v=\"24\", \"Google Chrome\";v=\"128\"",
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": "\"Windows\""
+    }
   });
 
   await context.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    window.chrome = { runtime: {} };
   });
 
   // Inject session cookie & credentials if provided
@@ -588,10 +616,6 @@ async function runWorker() {
 
     if (extractedToken) {
       console.log(`✓ Extracted valid JanitorAI session JWT (${extractedToken.substring(0, 16)}... len: ${extractedToken.length}).`);
-      console.log("✓ Applying Bearer authorization header to all browser and API requests...");
-      await context.setExtraHTTPHeaders({
-        Authorization: `Bearer ${extractedToken}`
-      });
     } else {
       console.warn("⚠️ Could not extract Bearer JWT from provided JANITOR_COOKIE / JANITOR_TOKEN.");
     }
