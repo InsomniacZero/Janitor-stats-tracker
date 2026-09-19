@@ -18,7 +18,9 @@ import {
   buildTimePaths,
   buildHourlyMarkers,
   makeTooltipMarkup,
-  bindChartTooltips
+  bindChartTooltips,
+  cleanCreatorHandle,
+  matchesWatchedCreator
 } from "./common.js";
 
 import {
@@ -1731,6 +1733,28 @@ function setupEventListeners() {
   });
   document.getElementById("editBotForm")?.addEventListener("submit", handleEditBotSubmit);
 
+  // Watched Creators Modal
+  document.getElementById("watchCreatorsBtn")?.addEventListener("click", openWatchCreatorModal);
+  document.getElementById("closeWatchCreatorModalBtn")?.addEventListener("click", closeWatchCreatorModal);
+  document.getElementById("watchCreatorModalOverlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "watchCreatorModalOverlay") closeWatchCreatorModal();
+  });
+  document.getElementById("addWatchedCreatorForm")?.addEventListener("submit", handleAddWatchedCreator);
+  document.getElementById("autoTrackFollowedCheckbox")?.addEventListener("change", handleToggleAutoTrackFollowed);
+
+  if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === "NEW_BOT_AUTO_TRACKED") {
+        showToast(`🚨 Minute-0 Auto-Track: "${msg.payload?.job?.character_name || "New Bot"}" by @${msg.payload?.job?.creator || "creator"} was captured!`, "success");
+        load().catch(console.error);
+      }
+    });
+  }
+
+  if (window.location.hash === "#watch-creators") {
+    openWatchCreatorModal();
+  }
+
   setupDragAndDrop();
   setupTooltips();
 
@@ -1789,12 +1813,180 @@ function setupEventListeners() {
     if (e.key === "Escape") {
       closeEntryModal();
       closeTrackModal();
+      closeWatchCreatorModal();
       closeSupabaseModal();
       closeEditBotModal();
       const confirmModal = document.getElementById("confirmModalOverlay");
       if (confirmModal) confirmModal.classList.remove("open");
     }
   });
+}
+
+// ==========================================
+// Watched Creators (Minute-0 Auto-Tracker)
+// ==========================================
+async function getWatchedCreatorsConfig() {
+  if (isExtension && chrome?.runtime?.sendMessage) {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "GET_WATCHED_CREATORS" });
+      if (res?.ok) {
+        return {
+          watchedCreators: res.watchedCreators || [],
+          autoTrackAllFollowed: Boolean(res.autoTrackAllFollowed)
+        };
+      }
+    } catch {}
+  }
+
+  const stored = await storage.get({ watchedCreators: [], autoTrackAllFollowed: false });
+  return {
+    watchedCreators: Array.isArray(stored.watchedCreators) ? stored.watchedCreators : [],
+    autoTrackAllFollowed: Boolean(stored.autoTrackAllFollowed)
+  };
+}
+
+function renderWatchedCreatorsList(watchedCreators) {
+  const container = document.getElementById("watchedCreatorsList");
+  const badge = document.getElementById("watchedCountBadge");
+  if (badge) badge.textContent = `${watchedCreators.length} watched`;
+
+  if (!container) return;
+
+  if (!watchedCreators.length) {
+    container.innerHTML = `
+      <div class="empty-watched-creators">
+        No creators being watched yet.<br>
+        Add a creator handle above to auto-track their new bot releases from minute 0.
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = watchedCreators.map(w => {
+    const handle = typeof w === "string" ? w : (w?.creatorHandle || "");
+    const clean = cleanCreatorHandle(handle);
+    const dateStr = w?.addedAt ? new Date(w.addedAt).toLocaleDateString([], { month: "short", day: "numeric" }) : "";
+    return `
+      <div class="watched-creator-item" data-handle="${escapeHtml(clean)}">
+        <div class="watched-creator-info">
+          <span class="watched-creator-handle">@${escapeHtml(clean)}</span>
+          <span class="watched-creator-badge">Minute 0 active</span>
+          ${dateStr ? `<span style="font-size: 11px; color: var(--color-text-muted);">Added ${escapeHtml(dateStr)}</span>` : ""}
+        </div>
+        <button type="button" class="btn-micro remove-watched-creator-btn" data-handle="${escapeHtml(clean)}" title="Stop watching creator" style="color: var(--color-error); border-color: rgba(217,115,115,0.3);">
+          <svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          <span>Remove</span>
+        </button>
+      </div>
+    `;
+  }).join("");
+
+  container.querySelectorAll(".remove-watched-creator-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const h = btn.dataset.handle;
+      if (h) handleRemoveWatchedCreator(h);
+    });
+  });
+}
+
+async function openWatchCreatorModal() {
+  const modal = document.getElementById("watchCreatorModalOverlay");
+  if (!modal) return;
+  modal.classList.add("open");
+
+  const config = await getWatchedCreatorsConfig();
+  const checkbox = document.getElementById("autoTrackFollowedCheckbox");
+  if (checkbox) checkbox.checked = config.autoTrackAllFollowed;
+
+  renderWatchedCreatorsList(config.watchedCreators);
+
+  const input = document.getElementById("newCreatorHandleInput");
+  if (input) {
+    input.value = "";
+    input.focus();
+  }
+}
+
+function closeWatchCreatorModal() {
+  const modal = document.getElementById("watchCreatorModalOverlay");
+  if (modal) modal.classList.remove("open");
+}
+
+async function handleAddWatchedCreator(e) {
+  e.preventDefault();
+  const input = document.getElementById("newCreatorHandleInput");
+  const raw = input?.value || "";
+  const handle = cleanCreatorHandle(raw);
+  if (!handle) {
+    showToast("Please enter a valid creator handle or profile link.", "error");
+    return;
+  }
+
+  if (isExtension && chrome?.runtime?.sendMessage) {
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: "ADD_WATCHED_CREATOR",
+        payload: { creatorHandle: handle }
+      });
+      if (res?.ok) {
+        renderWatchedCreatorsList(res.watchedCreators);
+        input.value = "";
+        showToast(`Watching @${handle}! New bots will be tracked from minute 0.`, "success");
+        return;
+      }
+    } catch {}
+  }
+
+  // Fallback to local storage
+  const config = await getWatchedCreatorsConfig();
+  if (!config.watchedCreators.some(w => cleanCreatorHandle(typeof w === "string" ? w : w.creatorHandle) === handle)) {
+    config.watchedCreators.push({ creatorHandle: handle, addedAt: new Date().toISOString() });
+    await storage.set({ watchedCreators: config.watchedCreators });
+  }
+  renderWatchedCreatorsList(config.watchedCreators);
+  if (input) input.value = "";
+  showToast(`Watching @${handle}! New bots will be tracked from minute 0.`, "success");
+}
+
+async function handleRemoveWatchedCreator(handle) {
+  const clean = cleanCreatorHandle(handle);
+  if (!clean) return;
+
+  if (isExtension && chrome?.runtime?.sendMessage) {
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: "REMOVE_WATCHED_CREATOR",
+        payload: { creatorHandle: clean }
+      });
+      if (res?.ok) {
+        renderWatchedCreatorsList(res.watchedCreators);
+        showToast(`Stopped watching @${clean}.`, "info");
+        return;
+      }
+    } catch {}
+  }
+
+  const config = await getWatchedCreatorsConfig();
+  config.watchedCreators = config.watchedCreators.filter(w => cleanCreatorHandle(typeof w === "string" ? w : w.creatorHandle) !== clean);
+  await storage.set({ watchedCreators: config.watchedCreators });
+  renderWatchedCreatorsList(config.watchedCreators);
+  showToast(`Stopped watching @${clean}.`, "info");
+}
+
+async function handleToggleAutoTrackFollowed(e) {
+  const enabled = Boolean(e.target.checked);
+
+  if (isExtension && chrome?.runtime?.sendMessage) {
+    try {
+      await chrome.runtime.sendMessage({
+        type: "SET_AUTO_TRACK_FOLLOWED",
+        payload: { enabled }
+      });
+    } catch {}
+  }
+
+  await storage.set({ autoTrackAllFollowed: enabled });
+  showToast(`Auto-track all followed creators: ${enabled ? "ON" : "OFF"}`, enabled ? "success" : "info");
 }
 
 function openTrackModal() {

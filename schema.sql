@@ -66,12 +66,29 @@ CREATE POLICY "Allow anon insert character_snapshots"
 CREATE POLICY "Allow anon delete character_snapshots" 
   ON character_snapshots FOR DELETE TO anon, authenticated USING (true);
 
--- 6. Enable Realtime Publications
+-- 6. Create Watched Creators Table (Optional sync for minute-0 target creators)
+CREATE TABLE IF NOT EXISTS watched_creators (
+  creator_handle TEXT PRIMARY KEY,
+  added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE watched_creators ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow anon read watched_creators" 
+  ON watched_creators FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "Allow anon insert watched_creators" 
+  ON watched_creators FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+CREATE POLICY "Allow anon delete watched_creators" 
+  ON watched_creators FOR DELETE TO anon, authenticated USING (true);
+
+-- 7. Enable Realtime Publications
 -- Allows the web app on Vercel to receive instant graph updates as new minute snapshots arrive
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
-    ALTER PUBLICATION supabase_realtime ADD TABLE character_snapshots, tracked_jobs;
+    ALTER PUBLICATION supabase_realtime ADD TABLE character_snapshots, tracked_jobs, watched_creators;
   END IF;
 EXCEPTION
   WHEN duplicate_object THEN NULL;

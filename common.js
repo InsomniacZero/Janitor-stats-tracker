@@ -554,6 +554,31 @@ function cleanUuid(val) {
   return m ? m[0].toLowerCase() : null;
 }
 
+function cleanCreatorHandle(val) {
+  if (!val) return "";
+  let str = String(val).trim();
+  // Strip URL prefix if present
+  if (str.includes("profiles/")) {
+    str = str.split("profiles/")[1].split(/[?#]/)[0];
+  }
+  // Strip leading @
+  str = str.replace(/^@+/, "").trim().toLowerCase();
+  return str;
+}
+
+function matchesWatchedCreator(creatorString, watchedList) {
+  if (!creatorString || !watchedList || !watchedList.length) return false;
+  const cleanCreator = cleanCreatorHandle(creatorString);
+  if (!cleanCreator) return false;
+
+  return watchedList.some(w => {
+    const raw = typeof w === "string" ? w : (w?.creatorHandle || w?.handle || "");
+    const cleanTarget = cleanCreatorHandle(raw);
+    if (!cleanTarget) return false;
+    return cleanTarget === cleanCreator || cleanCreator.includes(cleanTarget) || cleanTarget.includes(cleanCreator);
+  });
+}
+
 export {
   STAT_CONFIG,
   TRACKED_SERIES,
@@ -575,7 +600,9 @@ export {
   buildHourlyMarkers,
   makeTooltipMarkup,
   bindChartTooltips,
-  cleanUuid
+  cleanUuid,
+  cleanCreatorHandle,
+  matchesWatchedCreator
 };
 
 if (typeof globalThis !== "undefined") {
@@ -600,7 +627,9 @@ if (typeof globalThis !== "undefined") {
     buildHourlyMarkers,
     makeTooltipMarkup,
     bindChartTooltips,
-    cleanUuid
+    cleanUuid,
+    cleanCreatorHandle,
+    matchesWatchedCreator
   });
 }
 

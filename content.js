@@ -64,22 +64,84 @@ function isContextValid() {
   }
 }
 
+function cleanCreatorHandle(val) {
+  if (!val) return "";
+  let str = String(val).trim();
+  if (str.includes("profiles/")) {
+    str = str.split("profiles/")[1].split(/[?#]/)[0];
+  }
+  return str.replace(/^@+/, "").trim().toLowerCase();
+}
+
+function matchesWatchedCreator(creatorString, watchedList) {
+  if (!creatorString || !watchedList || !watchedList.length) return false;
+  const cleanCreator = cleanCreatorHandle(creatorString);
+  if (!cleanCreator) return false;
+
+  return watchedList.some(w => {
+    const raw = typeof w === "string" ? w : (w?.creatorHandle || w?.handle || "");
+    const cleanTarget = cleanCreatorHandle(raw);
+    if (!cleanTarget) return false;
+    return cleanTarget === cleanCreator || cleanCreator.includes(cleanTarget) || cleanTarget.includes(cleanCreator);
+  });
+}
+
 /**
  * Automatically checks incoming feed characters against active tracked jobs
- * and saves live snapshots to Supabase & IndexedDB without requiring manual navigation.
+ * or watched creators, and saves live snapshots to Supabase & IndexedDB without requiring manual navigation.
  */
 async function checkAndAutoSaveTrackedFeedCharacters(characters) {
   if (!characters || !characters.length) return;
   if (!isContextValid()) return;
   try {
-    const localStore = await chrome.storage.local.get("trackedJobs");
+    const localStore = await chrome.storage.local.get(["trackedJobs", "watchedCreators", "autoTrackAllFollowed"]);
     const trackedJobs = localStore.trackedJobs || {};
+    const watchedCreators = Array.isArray(localStore.watchedCreators) ? localStore.watchedCreators : [];
+    const autoTrackAllFollowed = Boolean(localStore.autoTrackAllFollowed); // strictly false by default
     const now = Date.now();
 
     for (const char of characters) {
       const cleanId = cleanUuid(char.characterId);
       if (!cleanId) continue;
-      const job = trackedJobs[cleanId];
+      let job = trackedJobs[cleanId];
+
+      // AUTO-TRACK CHECK: If bot is not yet tracked, check if its creator is watched or autoTrackAllFollowed is on
+      if (!job || job.status !== "active") {
+        const isWatchedCreator = matchesWatchedCreator(char.creator, watchedCreators);
+        const shouldAutoTrack = isWatchedCreator || autoTrackAllFollowed;
+
+        if (shouldAutoTrack) {
+          console.info(`[JStats] 🚨 Auto-registering newly published bot from creator @${char.creator}: "${char.characterName}" (${cleanId})`);
+          try {
+            const autoRes = await chrome.runtime.sendMessage({
+              type: "AUTO_REGISTER_CREATOR_BOT",
+              payload: {
+                characterId: cleanId,
+                characterName: char.characterName || "JanitorAI Character",
+                avatar: char.avatar || null,
+                creator: char.creator || null,
+                url: `https://janitorai.com/characters/${cleanId}`,
+                initialSnapshot: {
+                  msgs: char.msgs ?? 0,
+                  chats: char.chats ?? 0,
+                  comments: char.comments ?? 0,
+                  favourites: char.favourites ?? 0,
+                  publishedChats: char.publishedChats ?? 0,
+                  isExact: true,
+                  timestamp: new Date().toISOString()
+                }
+              }
+            });
+            if (autoRes?.ok && autoRes?.job) {
+              trackedJobs[cleanId] = autoRes.job;
+              job = autoRes.job;
+            }
+          } catch (err) {
+            console.debug("JStats: error sending AUTO_REGISTER_CREATOR_BOT", err);
+          }
+        }
+      }
+
       if (!job || job.status !== "active") continue;
 
       // Throttle: skip duplicate snapshot if exact numbers logged within last 45s

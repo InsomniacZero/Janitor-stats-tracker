@@ -29,6 +29,10 @@
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
             <span>Track Bot Link</span>
           </button>
+          <button class="btn btn-secondary" id="watchCreatorsBtn" data-tooltip="Auto-track new bots from creators at minute 0">
+            <svg viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+            <span>Watch Creators</span>
+          </button>
           <button class="btn btn-secondary" id="exportBtn" data-tooltip="Export snapshots as CSV">
             <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
             Export CSV
@@ -418,6 +422,52 @@
           <button type="submit" class="btn btn-primary" id="saveSupabaseBtn">Save & Test Connection</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Modal: Watch Creators (Minute-0 Auto-Tracker) -->
+  <div class="modal-overlay" id="watchCreatorModalOverlay" role="dialog" aria-modal="true" aria-labelledby="watchCreatorTitle">
+    <div class="modal-card" style="max-width: 540px;">
+      <div class="modal-header">
+        <div>
+          <h3 id="watchCreatorTitle">Minute-0 Creator Auto-Tracker</h3>
+          <p class="modal-subtitle">Automatically detect and track new bots the exact second a creator publishes them.</p>
+        </div>
+        <button class="modal-close" id="closeWatchCreatorModalBtn" aria-label="Close">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <form id="addWatchedCreatorForm" class="modal-form" style="margin-bottom: 20px;">
+          <div class="form-group">
+            <label for="newCreatorHandleInput">Creator Handle or Profile Link</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="newCreatorHandleInput" placeholder="e.g. @tutor or janitorai.com/profiles/..." required style="flex: 1;">
+              <button type="submit" class="btn btn-primary" id="submitAddCreatorBtn">Watch</button>
+            </div>
+            <div class="input-helper">Enter a JanitorAI creator username or paste their profile URL to monitor for new releases.</div>
+          </div>
+        </form>
+
+        <div class="notice" style="display: flex; align-items: flex-start; gap: 12px; margin-bottom: 20px;">
+          <input type="checkbox" id="autoTrackFollowedCheckbox" style="margin-top: 3px; cursor: pointer; accent-color: var(--sage-primary);">
+          <label for="autoTrackFollowedCheckbox" style="cursor: pointer; font-size: 13px; color: var(--color-text-primary);">
+            <strong>Auto-track all bots from creators I follow on JanitorAI</strong>
+            <div style="font-size: 11px; color: var(--color-text-muted); margin-top: 2px;">
+              Automatically start minute-0 tracking for any new bot published by anyone in your Following feed. (Kept off by default)
+            </div>
+          </label>
+        </div>
+
+        <div class="watched-creators-section">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <h4 style="font-size: 13px; font-weight: 600; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">Actively Watched Creators</h4>
+            <span id="watchedCountBadge" class="pill" style="font-size: 11px;">0 watched</span>
+          </div>
+          <div id="watchedCreatorsList" class="watched-creators-list" style="max-height: 220px; overflow-y: auto;">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

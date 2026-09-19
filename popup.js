@@ -271,6 +271,10 @@ document.getElementById("collectBtn").addEventListener("click", async () => {
 
 document.getElementById("dashboardBtn").addEventListener("click",()=>chrome.tabs.create({url:chrome.runtime.getURL("dashboard.html")}));
 
+document.getElementById("watchCreatorsPopupBtn")?.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html#watch-creators") });
+});
+
 load().catch(error=>{
   console.error(error);
   document.getElementById("notice").textContent="Could not open local tracker data.";

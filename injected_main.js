@@ -204,9 +204,8 @@
     const hasChats = Number.isFinite(chats) && chats >= 0;
 
     const rawId = obj.id || obj.character_id || obj.uuid || obj.characterId || obj.bot_id;
-    const charId = cleanUuid(rawId);
-
-    if (charId && hasMsgs && hasChats && (msgs > 0 || chats > 0) && !seen.has(charId)) {
+    const hasNameOrStats = Boolean(obj.name || obj.character_name || obj.stats || obj.avatar || obj.creator);
+    if (charId && hasMsgs && hasChats && (msgs > 0 || chats > 0 || hasNameOrStats) && !seen.has(charId)) {
       seen.add(charId);
       results.push({
         characterId: charId,

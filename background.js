@@ -14,6 +14,10 @@ import {
   updateTrackedJobStatus,
   updateTrackedJobMetadata
 } from "./supabase.js";
+import {
+  cleanCreatorHandle,
+  matchesWatchedCreator
+} from "./common.js";
 
 const ALARM_NAME = "janitorai-stats-refresh";
 const PERIOD_MINUTES = 1;
@@ -558,6 +562,187 @@ export async function scrapeCharacterById(characterId, jobMetadata = null) {
 }
 
 /**
+ * Auto-registers a newly discovered bot from a watched creator or followed feed.
+ * Instantly logs the Minute 0 baseline snapshot (0 msgs, 0 chats) and starts autonomous tracking.
+ */
+export async function autoRegisterCreatorBot(payload) {
+  const { characterId, characterName, avatar, creator, url, initialSnapshot } = payload || {};
+  const cleanId = cleanUuid(characterId);
+  if (!cleanId) throw new Error("Invalid characterId");
+
+  const localStore = await chrome.storage.local.get("trackedJobs");
+  const trackedJobs = localStore.trackedJobs || {};
+  if (trackedJobs[cleanId] && trackedJobs[cleanId].status === "active") {
+    return { ok: true, alreadyTracked: true, job: trackedJobs[cleanId] };
+  }
+
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 72 * 3600 * 1000).toISOString();
+
+  const job = {
+    character_id: cleanId,
+    character_name: characterName || "JanitorAI Character",
+    url: url || `https://janitorai.com/characters/${cleanId}`,
+    started_at: now.toISOString(),
+    expires_at: expiresAt,
+    status: "active",
+    last_scraped_at: now.toISOString(),
+    creator: creator || null,
+    avatar: avatar || null
+  };
+
+  // 1. Save to Supabase
+  try {
+    await saveTrackedJob(job);
+  } catch (err) {
+    console.debug("Supabase saveTrackedJob error in autoRegisterCreatorBot", err);
+  }
+
+  // 2. Save to Chrome Local Storage
+  trackedJobs[cleanId] = job;
+  await chrome.storage.local.set({ trackedJobs });
+
+  // 3. Save initial Minute 0 Snapshot
+  const snap = {
+    timestamp: initialSnapshot?.timestamp || now.toISOString(),
+    msgs: initialSnapshot?.msgs ?? 0,
+    msgsDisplay: (initialSnapshot?.msgs ?? 0).toLocaleString(),
+    chats: initialSnapshot?.chats ?? 0,
+    chatsDisplay: (initialSnapshot?.chats ?? 0).toLocaleString(),
+    comments: initialSnapshot?.comments ?? 0,
+    commentsDisplay: (initialSnapshot?.comments ?? 0).toLocaleString(),
+    favourites: initialSnapshot?.favourites ?? 0,
+    favouritesDisplay: (initialSnapshot?.favourites ?? 0).toLocaleString(),
+    publishedChats: initialSnapshot?.publishedChats ?? 0,
+    publishedChatsDisplay: (initialSnapshot?.publishedChats ?? 0).toLocaleString(),
+    isExact: true
+  };
+
+  try {
+    await saveCharacterSnapshot(
+      {
+        characterId: cleanId,
+        characterName: job.character_name,
+        url: job.url,
+        avatar: avatar || null,
+        creator: creator || null
+      },
+      snap
+    );
+  } catch (err) {
+    console.debug("saveCharacterSnapshot error in autoRegisterCreatorBot", err);
+  }
+
+  try {
+    await insertSnapshot(cleanId, snap);
+  } catch (err) {
+    console.debug("insertSnapshot error in autoRegisterCreatorBot", err);
+  }
+
+  // 4. Send Chrome Notification
+  try {
+    if (chrome.notifications && chrome.notifications.create) {
+      chrome.notifications.create({
+        type: "basic",
+        iconUrl: avatar || "icons/icon128.png",
+        title: "🚨 Auto-Tracked New Bot! (Minute 0)",
+        message: `"${job.character_name}" by @${creator || "creator"} was published! Tracking started at minute 0.`,
+        priority: 2
+      });
+    }
+  } catch (err) {
+    console.debug("Notification error", err);
+  }
+
+  await ensureAlarm();
+
+  // 5. Broadcast to all open tabs so dashboard and popup update immediately
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (tab.id) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: "NEW_BOT_AUTO_TRACKED",
+          payload: { characterId: cleanId, job, snapshot: snap }
+        }).catch(() => {});
+      }
+    }
+  } catch {}
+
+  return { ok: true, characterId: cleanId, job, snapshot: snap };
+}
+
+/**
+ * Periodically checks the Following feed for new releases from watched creators.
+ */
+export async function checkAndAutoTrackWatchedCreators() {
+  try {
+    const localStore = await chrome.storage.local.get(["watchedCreators", "autoTrackAllFollowed", "trackedJobs"]);
+    const watchedCreators = Array.isArray(localStore.watchedCreators) ? localStore.watchedCreators : [];
+    const autoTrackAllFollowed = Boolean(localStore.autoTrackAllFollowed);
+    if (!watchedCreators.length && !autoTrackAllFollowed) return;
+
+    const trackedJobs = localStore.trackedJobs || {};
+    const token = await getJanitorToken();
+    const headers = {
+      Accept: "application/json, text/plain, */*",
+      Referer: "https://janitorai.com/?segment=following"
+    };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const followingEndpoints = [
+      "https://janitorai.com/hampter/characters?segment=following",
+      "https://janitorai.com/hampter/following/characters"
+    ];
+
+    for (const ep of followingEndpoints) {
+      try {
+        const res = await fetch(ep, { credentials: "include", headers });
+        if (!res.ok) continue;
+        const json = await res.json();
+        const items = json.data || json.characters || (Array.isArray(json) ? json : []);
+        if (!Array.isArray(items) || !items.length) continue;
+
+        for (const it of items) {
+          const charId = cleanUuid(it.id || it.character_id || it.uuid);
+          if (!charId) continue;
+          if (trackedJobs[charId] && trackedJobs[charId].status === "active") continue;
+
+          const creator = it.creator_name || it.creator?.name || it.creator?.username || (typeof it.creator === "string" ? it.creator : null) || it.user?.name;
+          const isWatched = matchesWatchedCreator(creator, watchedCreators);
+          if (isWatched || autoTrackAllFollowed) {
+            console.info(`JStats [Background Alarm]: Auto-tracking new bot "${it.name}" from @${creator} (${charId})`);
+            const msgs = Number(it.stats?.total_message ?? it.stats?.total_messages ?? it.stats?.msgs ?? it.total_message ?? it.messages ?? 0);
+            const chats = Number(it.stats?.total_chat ?? it.stats?.total_chats ?? it.stats?.chats ?? it.total_chat ?? it.chats ?? 0);
+            await autoRegisterCreatorBot({
+              characterId: charId,
+              characterName: it.name || "JanitorAI Character",
+              avatar: it.avatar || it.image || null,
+              creator,
+              url: `https://janitorai.com/characters/${charId}`,
+              initialSnapshot: {
+                msgs: Number.isFinite(msgs) && msgs >= 0 ? msgs : 0,
+                chats: Number.isFinite(chats) && chats >= 0 ? chats : 0,
+                comments: Number(it.stats?.total_comment ?? it.total_comment ?? 0),
+                favourites: Number(it.stats?.total_favorite ?? it.total_favorite ?? 0),
+                publishedChats: Number(it.published_chats ?? 0),
+                isExact: true,
+                timestamp: new Date().toISOString()
+              }
+            });
+          }
+        }
+        break; // Successfully polled
+      } catch (e) {
+        console.debug("JStats: error polling following feed in checkAndAutoTrackWatchedCreators", e);
+      }
+    }
+  } catch (err) {
+    console.debug("JStats: error in checkAndAutoTrackWatchedCreators", err);
+  }
+}
+
+/**
  * 1-Minute Periodic Alarm Listener
  * Queries active 72h jobs and scrapes each active bot.
  */
@@ -565,6 +750,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== ALARM_NAME) return;
 
   try {
+    // 0. Check Following feed for newly dropped bots from watched creators
+    await checkAndAutoTrackWatchedCreators();
+
     const nowMs = Date.now();
 
     // 1. Retrieve jobs from Supabase
@@ -951,6 +1139,80 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       await updateTrackedJobMetadata(cleanId, { avatar, creator });
       return { ok: true };
+    })()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  // 8. AUTO_REGISTER_CREATOR_BOT: Instantly register new bot from watched creator from minute 0
+  if (message?.type === "AUTO_REGISTER_CREATOR_BOT") {
+    autoRegisterCreatorBot(message.payload)
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  // 9. GET_WATCHED_CREATORS
+  if (message?.type === "GET_WATCHED_CREATORS") {
+    (async () => {
+      const localStore = await chrome.storage.local.get(["watchedCreators", "autoTrackAllFollowed"]);
+      return {
+        ok: true,
+        watchedCreators: Array.isArray(localStore.watchedCreators) ? localStore.watchedCreators : [],
+        autoTrackAllFollowed: Boolean(localStore.autoTrackAllFollowed)
+      };
+    })()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  // 10. ADD_WATCHED_CREATOR
+  if (message?.type === "ADD_WATCHED_CREATOR") {
+    (async () => {
+      const raw = message.payload?.creatorHandle || message.payload?.handle || "";
+      const handle = cleanCreatorHandle(raw);
+      if (!handle) throw new Error("Invalid creator handle or profile link.");
+
+      const localStore = await chrome.storage.local.get("watchedCreators");
+      const list = Array.isArray(localStore.watchedCreators) ? localStore.watchedCreators : [];
+      if (!list.some(w => cleanCreatorHandle(typeof w === "string" ? w : w.creatorHandle) === handle)) {
+        list.push({
+          creatorHandle: handle,
+          addedAt: new Date().toISOString()
+        });
+        await chrome.storage.local.set({ watchedCreators: list });
+      }
+      return { ok: true, watchedCreators: list };
+    })()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  // 11. REMOVE_WATCHED_CREATOR
+  if (message?.type === "REMOVE_WATCHED_CREATOR") {
+    (async () => {
+      const raw = message.payload?.creatorHandle || message.payload?.handle || "";
+      const handle = cleanCreatorHandle(raw);
+      const localStore = await chrome.storage.local.get("watchedCreators");
+      let list = Array.isArray(localStore.watchedCreators) ? localStore.watchedCreators : [];
+      list = list.filter(w => cleanCreatorHandle(typeof w === "string" ? w : w.creatorHandle) !== handle);
+      await chrome.storage.local.set({ watchedCreators: list });
+      return { ok: true, watchedCreators: list };
+    })()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  // 12. SET_AUTO_TRACK_FOLLOWED
+  if (message?.type === "SET_AUTO_TRACK_FOLLOWED") {
+    (async () => {
+      const enabled = Boolean(message.payload?.enabled);
+      await chrome.storage.local.set({ autoTrackAllFollowed: enabled });
+      return { ok: true, autoTrackAllFollowed: enabled };
     })()
       .then(sendResponse)
       .catch(error => sendResponse({ ok: false, error: error.message }));

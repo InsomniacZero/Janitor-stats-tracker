@@ -567,6 +567,8 @@ CREATE TABLE IF NOT EXISTS tracked_jobs (
   character_id TEXT PRIMARY KEY,
   character_name TEXT NOT NULL,
   url TEXT NOT NULL,
+  avatar TEXT,
+  creator TEXT,
   started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '72 hours'),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'paused')),
@@ -585,6 +587,11 @@ CREATE TABLE IF NOT EXISTS character_snapshots (
   published_chats BIGINT NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS watched_creators (
+  creator_handle TEXT PRIMARY KEY,
+  added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_snapshots_char_time 
   ON character_snapshots(character_id, timestamp DESC);
 
@@ -593,6 +600,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status_expires
 
 ALTER TABLE tracked_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE character_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE watched_creators ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow anon read tracked_jobs" ON tracked_jobs FOR SELECT TO anon, authenticated USING (true);
 CREATE POLICY "Allow anon insert tracked_jobs" ON tracked_jobs FOR INSERT TO anon, authenticated WITH CHECK (true);
@@ -603,10 +611,14 @@ CREATE POLICY "Allow anon read character_snapshots" ON character_snapshots FOR S
 CREATE POLICY "Allow anon insert character_snapshots" ON character_snapshots FOR INSERT TO anon, authenticated WITH CHECK (true);
 CREATE POLICY "Allow anon delete character_snapshots" ON character_snapshots FOR DELETE TO anon, authenticated USING (true);
 
+CREATE POLICY "Allow anon read watched_creators" ON watched_creators FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "Allow anon insert watched_creators" ON watched_creators FOR INSERT TO anon, authenticated WITH CHECK (true);
+CREATE POLICY "Allow anon delete watched_creators" ON watched_creators FOR DELETE TO anon, authenticated USING (true);
+
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
-    ALTER PUBLICATION supabase_realtime ADD TABLE character_snapshots, tracked_jobs;
+    ALTER PUBLICATION supabase_realtime ADD TABLE character_snapshots, tracked_jobs, watched_creators;
   END IF;
 EXCEPTION
   WHEN duplicate_object THEN NULL;

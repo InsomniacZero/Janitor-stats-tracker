@@ -1003,6 +1003,55 @@ select.select:focus {
   align-items: center;
 }
 
+/* Watched Creators List */
+.watched-creator-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+  transition: border-color 150ms ease;
+}
+
+.watched-creator-item:hover {
+  border-color: var(--color-border-medium);
+}
+
+.watched-creator-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.watched-creator-handle {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+}
+
+.watched-creator-badge {
+  font-size: 10px;
+  background: rgba(129, 178, 154, 0.15);
+  color: var(--sage-light);
+  border: 1px solid rgba(129, 178, 154, 0.3);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+}
+
+.empty-watched-creators {
+  text-align: center;
+  padding: 20px 14px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  background: var(--bg-secondary);
+  border: 1px dashed var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
 /* Non-Pill Legend Markers */
 .legend-dot {
   width: 8px;
