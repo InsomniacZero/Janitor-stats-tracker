@@ -333,22 +333,27 @@ export async function processAndSaveScrapedCharacter(cleanId, raw, jobMetadata =
     return null;
   }
 
+  const pubVal = raw.stats?.publishedChats ?? raw.stats?.published_chats ?? raw.publishedChats ?? raw.published_chats;
+  let pubNum = (pubVal != null && Number.isFinite(Number(pubVal)) && Number(pubVal) > 0) ? Number(pubVal) : null;
+
   let latestSnap = null;
-  if (!Number.isFinite(comments) || comments < 0 || !Number.isFinite(favourites) || favourites < 0) {
+  if (!Number.isFinite(comments) || comments <= 0 || !Number.isFinite(favourites) || favourites <= 0 || pubNum == null || pubNum <= 0) {
     try {
       latestSnap = await getLatestSnapshot(cleanId);
     } catch {}
   }
 
-  const resolvedComments = Number.isFinite(comments) && comments >= 0
+  const resolvedComments = (Number.isFinite(comments) && comments > 0)
     ? comments
-    : (latestSnap && Number.isFinite(Number(latestSnap.comments)) ? Number(latestSnap.comments) : 0);
-  const resolvedFavs = Number.isFinite(favourites) && favourites >= 0
-    ? favourites
-    : (latestSnap && Number.isFinite(Number(latestSnap.favourites)) ? Number(latestSnap.favourites) : 0);
+    : (latestSnap && Number.isFinite(Number(latestSnap.comments)) && Number(latestSnap.comments) > 0 ? Number(latestSnap.comments) : (Number.isFinite(comments) && comments >= 0 ? comments : 0));
 
-  const pubVal = raw.stats?.publishedChats ?? raw.stats?.published_chats ?? raw.publishedChats ?? raw.published_chats;
-  const publishedChats = pubVal != null ? Number(pubVal) : (latestSnap?.publishedChats ?? null);
+  const resolvedFavs = (Number.isFinite(favourites) && favourites > 0)
+    ? favourites
+    : (latestSnap && Number.isFinite(Number(latestSnap.favourites)) && Number(latestSnap.favourites) > 0 ? Number(latestSnap.favourites) : (Number.isFinite(favourites) && favourites >= 0 ? favourites : 0));
+
+  const publishedChats = pubNum != null && pubNum > 0
+    ? pubNum
+    : (latestSnap && Number.isFinite(Number(latestSnap.publishedChats)) && Number(latestSnap.publishedChats) > 0 ? Number(latestSnap.publishedChats) : (jobMetadata?.publishedChats ? Number(jobMetadata.publishedChats) : null));
 
   const creator = raw.creator || raw.creator_name || raw.creator?.name || raw.creator_username || (typeof raw.creator === "string" ? raw.creator : null) || raw.user?.name || jobMetadata?.creator || null;
   const charMetadata = {
@@ -668,22 +673,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: false, reason: "INVALID_CHATS_OR_MSGS" };
       }
 
-      let commentsVal = Number(payload.comments);
-      let favouritesVal = Number(payload.favourites);
+      let commentsVal = (payload.comments != null && Number.isFinite(Number(payload.comments)) && Number(payload.comments) > 0)
+        ? Number(payload.comments)
+        : null;
+      let favouritesVal = (payload.favourites != null && Number.isFinite(Number(payload.favourites)) && Number(payload.favourites) > 0)
+        ? Number(payload.favourites)
+        : null;
+      let pubChatsVal = (payload.publishedChats != null && Number.isFinite(Number(payload.publishedChats)) && Number(payload.publishedChats) > 0)
+        ? Number(payload.publishedChats)
+        : null;
       let latestSnap = null;
 
-      if (!Number.isFinite(commentsVal) || !Number.isFinite(favouritesVal)) {
+      if (commentsVal == null || favouritesVal == null || pubChatsVal == null) {
         try {
           latestSnap = await getLatestSnapshot(cleanId);
         } catch {}
       }
 
-      if (!Number.isFinite(commentsVal)) {
-        commentsVal = (latestSnap && Number.isFinite(Number(latestSnap.comments))) ? Number(latestSnap.comments) : 0;
+      if (commentsVal == null && latestSnap && Number.isFinite(Number(latestSnap.comments)) && Number(latestSnap.comments) > 0) {
+        commentsVal = Number(latestSnap.comments);
       }
-      if (!Number.isFinite(favouritesVal)) {
-        favouritesVal = (latestSnap && Number.isFinite(Number(latestSnap.favourites))) ? Number(latestSnap.favourites) : 0;
+      if (favouritesVal == null && latestSnap && Number.isFinite(Number(latestSnap.favourites)) && Number(latestSnap.favourites) > 0) {
+        favouritesVal = Number(latestSnap.favourites);
       }
+      if (pubChatsVal == null && latestSnap && Number.isFinite(Number(latestSnap.publishedChats)) && Number(latestSnap.publishedChats) > 0) {
+        pubChatsVal = Number(latestSnap.publishedChats);
+      }
+
+      const finalComments = commentsVal != null && commentsVal >= 0 ? commentsVal : 0;
+      const finalFavs = favouritesVal != null && favouritesVal >= 0 ? favouritesVal : 0;
+      const finalPub = pubChatsVal != null && pubChatsVal > 0 ? pubChatsVal : null;
 
       const snapshot = {
         timestamp: payload.timestamp || new Date().toISOString(),
@@ -693,12 +712,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chats: chatsVal,
         chatsDisplay: payload.chatsDisplay ?? chatsVal.toLocaleString(),
         chatMsgRatio: chatsVal > 0 ? Number((msgsVal / chatsVal).toFixed(3)) : null,
-        comments: commentsVal,
-        commentsDisplay: payload.commentsDisplay ?? commentsVal.toLocaleString(),
-        favourites: favouritesVal,
-        favouritesDisplay: payload.favouritesDisplay ?? favouritesVal.toLocaleString(),
-        publishedChats: Number.isFinite(payload.publishedChats) ? payload.publishedChats : (latestSnap?.publishedChats ?? null),
-        publishedChatsDisplay: payload.publishedChatsDisplay ?? null
+        comments: finalComments,
+        commentsDisplay: payload.commentsDisplay ?? finalComments.toLocaleString(),
+        favourites: finalFavs,
+        favouritesDisplay: payload.favouritesDisplay ?? finalFavs.toLocaleString(),
+        publishedChats: finalPub,
+        publishedChatsDisplay: payload.publishedChatsDisplay ?? (finalPub != null ? finalPub.toLocaleString() : null)
       };
 
       await saveCharacterSnapshot(

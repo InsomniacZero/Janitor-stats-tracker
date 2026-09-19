@@ -3,9 +3,16 @@
  * Bridges the Vercel web dashboard (or localhost) with the background Chrome Extension.
  */
 (() => {
+  let cachedExtensionVersion = "1.3.0";
+  try {
+    if (typeof chrome !== "undefined" && chrome.runtime?.getManifest) {
+      cachedExtensionVersion = chrome.runtime.getManifest()?.version || "1.3.0";
+    }
+  } catch {}
+
   function isExtensionValid() {
     try {
-      return typeof chrome !== "undefined" && Boolean(chrome.runtime?.id);
+      return typeof chrome !== "undefined" && Boolean(chrome.runtime && chrome.runtime.id);
     } catch {
       return false;
     }
@@ -15,7 +22,9 @@
     if (!isExtensionValid()) return;
     try {
       chrome.runtime.sendMessage(message, (res) => {
-        if (chrome.runtime?.lastError) {
+        try {
+          if (chrome.runtime?.lastError) return;
+        } catch {
           return;
         }
         if (callback) callback(res);
@@ -31,7 +40,7 @@
       window.postMessage({
         source: "JSTATS_EXTENSION",
         type: "EXTENSION_READY",
-        version: chrome.runtime.getManifest()?.version || "1.3.0",
+        version: cachedExtensionVersion,
         active: true,
         timestamp: Date.now()
       }, "*");
@@ -107,10 +116,14 @@
 
   announceExtension();
   const announceTimer = setInterval(() => {
-    if (!isExtensionValid()) {
+    try {
+      if (!isExtensionValid()) {
+        clearInterval(announceTimer);
+        return;
+      }
+      announceExtension();
+    } catch {
       clearInterval(announceTimer);
-      return;
     }
-    announceExtension();
   }, 4000);
 })();

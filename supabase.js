@@ -287,14 +287,51 @@ export async function insertSnapshot(characterId, snapshot) {
   const config = await getSupabaseConfig();
   if (!config) return false;
 
+  let comments = Number(snapshot.comments);
+  let favourites = Number(snapshot.favourites);
+  let publishedChats = Number(snapshot.publishedChats);
+
+  // If any optional stat is missing or <= 0, query the latest record in Supabase to inherit
+  if (
+    (!Number.isFinite(comments) || comments <= 0) ||
+    (!Number.isFinite(favourites) || favourites <= 0) ||
+    (!Number.isFinite(publishedChats) || publishedChats <= 0)
+  ) {
+    try {
+      const q = `${config.url}/rest/v1/character_snapshots?character_id=eq.${encodeURIComponent(characterId)}&order=timestamp.desc&limit=1`;
+      const res = await fetch(q, {
+        headers: {
+          apikey: config.anonKey,
+          Authorization: `Bearer ${config.anonKey}`,
+          Accept: "application/json"
+        }
+      });
+      if (res.ok) {
+        const rows = await res.json();
+        if (Array.isArray(rows) && rows.length > 0) {
+          const prev = rows[0];
+          if ((!Number.isFinite(comments) || comments <= 0) && Number(prev.comments) > 0) {
+            comments = Number(prev.comments);
+          }
+          if ((!Number.isFinite(favourites) || favourites <= 0) && Number(prev.favourites) > 0) {
+            favourites = Number(prev.favourites);
+          }
+          if ((!Number.isFinite(publishedChats) || publishedChats <= 0) && Number(prev.published_chats) > 0) {
+            publishedChats = Number(prev.published_chats);
+          }
+        }
+      }
+    } catch {}
+  }
+
   const payload = {
     character_id: characterId,
     timestamp: snapshot.timestamp || new Date().toISOString(),
     chats: Number(snapshot.chats) || 0,
     msgs: Number(snapshot.msgs) || 0,
-    comments: Number(snapshot.comments) || 0,
-    favourites: Number(snapshot.favourites) || 0,
-    published_chats: Number(snapshot.publishedChats) || 0
+    comments: Number.isFinite(comments) && comments >= 0 ? comments : 0,
+    favourites: Number.isFinite(favourites) && favourites >= 0 ? favourites : 0,
+    published_chats: Number.isFinite(publishedChats) && publishedChats >= 0 ? publishedChats : 0
   };
 
   try {
@@ -348,12 +385,14 @@ export async function fetchCharacterSnapshots(characterId) {
 
     let lastKnownComments = null;
     let lastKnownFavourites = null;
+    let lastKnownPubChats = null;
 
-    return allRows.map(r => {
+    const mapped = allRows.map(r => {
       const chats = Number(r.chats);
       const msgs = Number(r.msgs);
       let comments = Number(r.comments);
       let favourites = Number(r.favourites);
+      let pubChats = Number(r.published_chats);
 
       // Protect against transient zeroes from feed card artifacts
       if (Number.isFinite(comments) && comments > 0) {
@@ -368,6 +407,12 @@ export async function fetchCharacterSnapshots(characterId) {
         favourites = lastKnownFavourites;
       }
 
+      if (Number.isFinite(pubChats) && pubChats > 0) {
+        lastKnownPubChats = pubChats;
+      } else if ((!Number.isFinite(pubChats) || pubChats <= 0) && lastKnownPubChats != null) {
+        pubChats = lastKnownPubChats;
+      }
+
       return {
         timestamp: r.timestamp,
         characterId: r.character_id,
@@ -376,9 +421,22 @@ export async function fetchCharacterSnapshots(characterId) {
         chatMsgRatio: chats > 0 ? Number((msgs / chats).toFixed(3)) : null,
         comments: Number.isFinite(comments) && comments >= 0 ? comments : 0,
         favourites: Number.isFinite(favourites) && favourites >= 0 ? favourites : 0,
-        publishedChats: Number(r.published_chats) || 0
+        publishedChats: Number.isFinite(pubChats) && pubChats >= 0 ? pubChats : 0
       };
     });
+
+    // If early snapshots had 0 publishedChats before the first positive one was encountered, backfill them
+    if (lastKnownPubChats != null && lastKnownPubChats > 0) {
+      for (let i = 0; i < mapped.length; i++) {
+        if (mapped[i].publishedChats === 0) {
+          mapped[i].publishedChats = lastKnownPubChats;
+        } else {
+          break;
+        }
+      }
+    }
+
+    return mapped;
   } catch (err) {
     console.warn("JStats: failed to fetch snapshots from Supabase", err);
     return [];
@@ -424,15 +482,18 @@ export function subscribeToRealtimeSnapshots(characterId, onSnapshot) {
             if (!characterId || record.character_id === characterId) {
               const chats = Number(record.chats);
               const msgs = Number(record.msgs);
+              const pubChats = Number(record.published_chats);
+              const comms = Number(record.comments);
+              const favs = Number(record.favourites);
               onSnapshot({
                 timestamp: record.timestamp,
                 characterId: record.character_id,
                 chats,
                 msgs,
                 chatMsgRatio: chats > 0 ? Number((msgs / chats).toFixed(3)) : null,
-                comments: Number(record.comments),
-                favourites: Number(record.favourites),
-                publishedChats: Number(record.published_chats)
+                comments: Number.isFinite(comms) && comms > 0 ? comms : null,
+                favourites: Number.isFinite(favs) && favs > 0 ? favs : null,
+                publishedChats: Number.isFinite(pubChats) && pubChats > 0 ? pubChats : null
               });
             }
           }

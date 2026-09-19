@@ -136,17 +136,24 @@ async function saveCharacterSnapshot(character, snapshot) {
       existing.createdAt = character.createdAt || existing.createdAt;
       existing.updatedAt = character.updatedAt || existing.updatedAt;
       existing.publishedAt = character.publishedAt || existing.publishedAt;
-      if (Number.isFinite(snapshot.publishedChats)) existing.publishedChats = snapshot.publishedChats;
+      if (Number.isFinite(snapshot.publishedChats) && snapshot.publishedChats > 0) {
+        existing.publishedChats = snapshot.publishedChats;
+      }
       existing.lastSeen = snapshot.timestamp;
 
+      const resolvedPubChats = (Number.isFinite(snapshot.publishedChats) && snapshot.publishedChats > 0)
+        ? snapshot.publishedChats
+        : (existing.publishedChats ?? null);
+
       const sameStats = existing.lastStats &&
-        ["msgs", "chats", "comments", "favourites", "publishedChats"].every(
+        ["msgs", "chats", "comments", "favourites"].every(
           key => existing.lastStats[key] === snapshot[key]
-        );
+        ) && (existing.lastStats.publishedChats === resolvedPubChats);
 
       if (!sameStats) {
         snaps.add({
           ...snapshot,
+          publishedChats: resolvedPubChats,
           characterId: character.characterId
         });
         existing.snapshotCount += 1;
@@ -156,7 +163,7 @@ async function saveCharacterSnapshot(character, snapshot) {
           chats: snapshot.chats,
           comments: snapshot.comments,
           favourites: snapshot.favourites,
-          publishedChats: snapshot.publishedChats ?? null
+          publishedChats: resolvedPubChats
         };
       }
 

@@ -104,18 +104,61 @@ function getWindowSnapshots() {
 }
 
 function normalizeSnapshots(snaps) {
-  return (snaps || []).map(s => {
+  let lastKnownComments = null;
+  let lastKnownFavs = null;
+  let lastKnownPubChats = null;
+
+  const mapped = (snaps || []).map(s => {
     const msgs = Number(s.msgs);
     const chats = Number(s.chats);
     let chatMsgRatio = s.chatMsgRatio != null ? Number(s.chatMsgRatio) : null;
     if ((chatMsgRatio == null || !Number.isFinite(chatMsgRatio)) && Number.isFinite(msgs) && Number.isFinite(chats) && chats > 0) {
       chatMsgRatio = Number((msgs / chats).toFixed(3));
     }
+
+    let comments = Number(s.comments);
+    if (Number.isFinite(comments) && comments > 0) {
+      lastKnownComments = comments;
+    } else if ((!Number.isFinite(comments) || comments <= 0) && lastKnownComments != null) {
+      comments = lastKnownComments;
+    }
+
+    let favourites = Number(s.favourites);
+    if (Number.isFinite(favourites) && favourites > 0) {
+      lastKnownFavs = favourites;
+    } else if ((!Number.isFinite(favourites) || favourites <= 0) && lastKnownFavs != null) {
+      favourites = lastKnownFavs;
+    }
+
+    let publishedChats = Number(s.publishedChats);
+    if (Number.isFinite(publishedChats) && publishedChats > 0) {
+      lastKnownPubChats = publishedChats;
+    } else if ((!Number.isFinite(publishedChats) || publishedChats <= 0) && lastKnownPubChats != null) {
+      publishedChats = lastKnownPubChats;
+    }
+
     return {
       ...s,
-      chatMsgRatio
+      msgs: Number.isFinite(msgs) ? msgs : 0,
+      chats: Number.isFinite(chats) ? chats : 0,
+      chatMsgRatio,
+      comments: Number.isFinite(comments) && comments >= 0 ? comments : 0,
+      favourites: Number.isFinite(favourites) && favourites >= 0 ? favourites : 0,
+      publishedChats: Number.isFinite(publishedChats) && publishedChats >= 0 ? publishedChats : 0
     };
   });
+
+  if (lastKnownPubChats != null && lastKnownPubChats > 0) {
+    for (let i = 0; i < mapped.length; i++) {
+      if (mapped[i].publishedChats === 0) {
+        mapped[i].publishedChats = lastKnownPubChats;
+      } else {
+        break;
+      }
+    }
+  }
+
+  return mapped;
 }
 
 function cleanUuid(val) {
@@ -654,11 +697,16 @@ function renderBotShowcase(character, latest) {
 
   const windowSnapshots = getWindowSnapshots();
 
+  const lastWithPub = [...state.snapshots].reverse().find(s => Number.isFinite(s.publishedChats) && s.publishedChats > 0);
+  const resolvedPublishedChats = (Number.isFinite(latest?.publishedChats) && latest.publishedChats > 0)
+    ? latest.publishedChats
+    : (character.publishedChats || lastWithPub?.publishedChats || 0);
+
   const metricsConfig = [
     { key: "msgs", label: "Messages", cls: "stat-messages", val: latest?.msgs },
     { key: "chats", label: "Chats", cls: "stat-chats", val: latest?.chats },
     { key: "favourites", label: "Favorites", cls: "stat-favs", val: latest?.favourites },
-    { key: "publishedChats", label: "Published Chats", cls: "stat-published", val: latest?.publishedChats ?? character.publishedChats },
+    { key: "publishedChats", label: "Published Chats", cls: "stat-published", val: resolvedPublishedChats },
     { key: "comments", label: "Comments", cls: "stat-comments", val: latest?.comments }
   ];
 
@@ -826,7 +874,11 @@ function renderMeta(character) {
   const meta = [];
   if (character.publishedAt) meta.push(`Published · ${character.publishedAt}`);
   if (character.updatedAt) meta.push(`Updated · ${character.updatedAt}`);
-  if (character.publishedChats != null) meta.push(`${formatNumber(character.publishedChats)} published chats`);
+  const lastWithPub = [...state.snapshots].reverse().find(s => Number.isFinite(s.publishedChats) && s.publishedChats > 0);
+  const pubChats = (Number.isFinite(character.publishedChats) && character.publishedChats > 0)
+    ? character.publishedChats
+    : (lastWithPub?.publishedChats || null);
+  if (pubChats != null && pubChats > 0) meta.push(`${formatNumber(pubChats)} published chats`);
   const metaEl = document.getElementById("meta");
   if (metaEl) {
     metaEl.innerHTML = meta.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
@@ -1110,9 +1162,10 @@ async function handleIncomingSnapshot(characterId, newSnapshot) {
   if (cleanIncoming && cleanCurrent && cleanIncoming === cleanCurrent) {
     const exists = state.snapshots.some(s => s.timestamp === newSnapshot.timestamp);
     if (!exists) {
-      // Find latest valid comments and favourites to protect against transient 0s
+      // Find latest valid comments, favourites, and publishedChats to protect against transient 0s
       const lastWithComments = [...state.snapshots].reverse().find(s => Number.isFinite(s.comments) && s.comments > 0);
       const lastWithFavs = [...state.snapshots].reverse().find(s => Number.isFinite(s.favourites) && s.favourites > 0);
+      const lastWithPub = [...state.snapshots].reverse().find(s => Number.isFinite(s.publishedChats) && s.publishedChats > 0);
 
       const resolvedComments = (Number.isFinite(newSnapshot.comments) && newSnapshot.comments > 0)
         ? newSnapshot.comments
@@ -1122,12 +1175,18 @@ async function handleIncomingSnapshot(characterId, newSnapshot) {
         ? newSnapshot.favourites
         : (lastWithFavs ? lastWithFavs.favourites : (newSnapshot.favourites || 0));
 
+      const resolvedPub = (Number.isFinite(newSnapshot.publishedChats) && newSnapshot.publishedChats > 0)
+        ? newSnapshot.publishedChats
+        : (lastWithPub ? lastWithPub.publishedChats : (newSnapshot.publishedChats || current?.publishedChats || 0));
+
       const sanitizedSnapshot = {
         ...newSnapshot,
         comments: resolvedComments,
         commentsDisplay: resolvedComments.toLocaleString(),
         favourites: resolvedFavs,
-        favouritesDisplay: resolvedFavs.toLocaleString()
+        favouritesDisplay: resolvedFavs.toLocaleString(),
+        publishedChats: resolvedPub,
+        publishedChatsDisplay: resolvedPub > 0 ? resolvedPub.toLocaleString() : null
       };
 
       const normalized = normalizeSnapshots([sanitizedSnapshot])[0];

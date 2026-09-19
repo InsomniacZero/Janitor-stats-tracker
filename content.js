@@ -56,12 +56,21 @@ window.addEventListener("message", (e) => {
   }
 });
 
+function isContextValid() {
+  try {
+    return typeof chrome !== "undefined" && Boolean(chrome.runtime && chrome.runtime.id);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Automatically checks incoming feed characters against active tracked jobs
  * and saves live snapshots to Supabase & IndexedDB without requiring manual navigation.
  */
 async function checkAndAutoSaveTrackedFeedCharacters(characters) {
   if (!characters || !characters.length) return;
+  if (!isContextValid()) return;
   try {
     const localStore = await chrome.storage.local.get("trackedJobs");
     const trackedJobs = localStore.trackedJobs || {};
@@ -100,18 +109,23 @@ async function checkAndAutoSaveTrackedFeedCharacters(characters) {
         commentsDisplay: char.commentsDisplay ?? null,
         favourites: char.favourites ?? null,
         favouritesDisplay: char.favouritesDisplay ?? null,
+        publishedChats: char.publishedChats ?? null,
+        publishedChatsDisplay: char.publishedChatsDisplay ?? null,
         isExact: true,
         timestamp: new Date().toISOString()
       };
 
-      chrome.runtime.sendMessage({
-        type: "SAVE_SNAPSHOT",
-        payload: snapshotPayload
-      }).then(res => {
-        if (res?.ok) {
-          console.info(`[JStats] Automatically logged live Following tab stats for ${snapshotPayload.characterName}:`, char);
-        }
-      }).catch(() => {});
+      if (!isContextValid()) return;
+      try {
+        chrome.runtime.sendMessage({
+          type: "SAVE_SNAPSHOT",
+          payload: snapshotPayload
+        }).then(res => {
+          if (res?.ok) {
+            console.info(`[JStats] Automatically logged live Following tab stats for ${snapshotPayload.characterName}:`, char);
+          }
+        }).catch(() => {});
+      } catch {}
     }
   } catch (err) {
     console.debug("JStats: error in checkAndAutoSaveTrackedFeedCharacters", err);
