@@ -38,29 +38,79 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function extractTokenFromString(str) {
+export function extractSessionObject(str) {
   if (!str || typeof str !== "string") return null;
-  const clean = str.trim().replace(/^base64-/, "");
+  const trimmed = str.trim();
 
+  // 1. Direct JSON (e.g. if user pasted session JSON directly)
   try {
-    const o = JSON.parse(str);
-    const tok = o?.access_token || o?.accessToken || (Array.isArray(o) && o[0]?.access_token) || o?.currentSession?.access_token;
-    if (tok && typeof tok === "string" && tok.startsWith("ey")) return tok;
+    const o = JSON.parse(trimmed);
+    if (o?.access_token) return o;
+    if (Array.isArray(o) && o[0]?.access_token) return o[0];
+    if (o?.currentSession?.access_token) return o.currentSession;
   } catch {}
 
-  try {
-    const decoded = Buffer.from(clean, "base64").toString("utf-8");
-    if (decoded.startsWith("ey") && decoded.split(".").length === 3) return decoded;
+  // 2. Chunked cookies (sb-auth-auth-token.0, sb-auth-auth-token.1, etc.)
+  if (trimmed.includes("auth-token")) {
+    const chunks = [];
+    const chunkMatches = trimmed.matchAll(/(?:sb-[a-zA-Z0-9_-]*-)?auth-token(?:\.(\d+))?=(?:base64-)?([^;]+)/g);
+    for (const match of chunkMatches) {
+      const idx = match[1] !== undefined ? parseInt(match[1], 10) : 0;
+      let val = match[2].trim();
+      chunks.push({ idx, val });
+    }
+    if (chunks.length > 0) {
+      chunks.sort((a, b) => a.idx - b.idx);
+      const combinedB64 = chunks.map(c => c.val).join("");
+      try {
+        const decoded = Buffer.from(combinedB64, "base64").toString("utf-8");
+        const parsed = JSON.parse(decoded);
+        if (parsed?.access_token) return parsed;
+      } catch {}
+    }
+  }
+
+  // 3. Standalone base64- prefix in the string
+  const b64Match = trimmed.match(/base64-([A-Za-z0-9+/=]+)/);
+  if (b64Match) {
     try {
-      const o = JSON.parse(decoded);
-      const tok = o?.access_token || o?.accessToken || (Array.isArray(o) && o[0]?.access_token) || o?.currentSession?.access_token;
-      if (tok && typeof tok === "string" && tok.startsWith("ey")) return tok;
+      const decoded = Buffer.from(b64Match[1], "base64").toString("utf-8");
+      const parsed = JSON.parse(decoded);
+      if (parsed?.access_token) return parsed;
     } catch {}
+  }
+
+  // 4. Standalone base64 string
+  try {
+    const decoded = Buffer.from(trimmed.replace(/^base64-/, ""), "base64").toString("utf-8");
+    const parsed = JSON.parse(decoded);
+    if (parsed?.access_token) return parsed;
+  } catch {}
+
+  return null;
+}
+
+export function extractTokenFromString(str) {
+  if (!str || typeof str !== "string") return null;
+
+  // 1. Try extracting through parsed session object
+  const session = extractSessionObject(str);
+  if (session?.access_token && typeof session.access_token === "string") {
+    return session.access_token;
+  }
+
+  const trimmed = str.trim();
+
+  // 2. Try raw base64 string that decodes directly to a JWT (starts with eyJ)
+  try {
+    const decoded = Buffer.from(trimmed.replace(/^base64-/, ""), "base64").toString("utf-8");
+    if (decoded.startsWith("ey") && decoded.split(".").length === 3) return decoded;
     const m = decoded.match(/(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})/);
     if (m) return m[1];
   } catch {}
 
-  const m = str.match(/(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})/);
+  // 3. Direct raw JWT pattern in the string
+  const m = trimmed.match(/(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})/);
   if (m) return m[1];
 
   return null;
@@ -368,10 +418,15 @@ async function runWorker() {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
   });
 
-  // Inject session cookie if provided
+  // Inject session cookie & credentials if provided
   let extractedToken = null;
+  let sessionObj = null;
   if (JANITOR_COOKIE || JANITOR_TOKEN) {
     console.log("Injecting JanitorAI auth session credentials into browser context...");
+
+    sessionObj = extractSessionObject(JANITOR_COOKIE) || extractSessionObject(JANITOR_TOKEN);
+    extractedToken = extractTokenFromString(JANITOR_TOKEN) || extractTokenFromString(JANITOR_COOKIE);
+
     const cookiesToAdd = [];
     if (JANITOR_COOKIE) {
       const parts = JANITOR_COOKIE.split(";");
@@ -381,7 +436,7 @@ async function runWorker() {
           cookiesToAdd.push({
             name: k,
             value: v.join("="),
-            domain: "janitorai.com",
+            domain: ".janitorai.com",
             path: "/"
           });
         }
@@ -391,7 +446,7 @@ async function runWorker() {
       cookiesToAdd.push({
         name: "sb-auth-token",
         value: JANITOR_TOKEN,
-        domain: "janitorai.com",
+        domain: ".janitorai.com",
         path: "/"
       });
     }
@@ -399,12 +454,27 @@ async function runWorker() {
       await context.addCookies(cookiesToAdd);
     }
 
-    extractedToken = extractTokenFromString(JANITOR_TOKEN) || extractTokenFromString(JANITOR_COOKIE);
+    if (sessionObj) {
+      if (sessionObj.user?.email) {
+        console.log(`✓ Authenticated JanitorAI User: ${sessionObj.user.email}`);
+      }
+      const sessionJsonStr = JSON.stringify(sessionObj);
+      await context.addInitScript((sStr) => {
+        try {
+          window.localStorage.setItem("sb-auth-auth-token", sStr);
+          window.localStorage.setItem("sb-mcmzxtzhmmmpnyhreddbo-auth-token", sStr);
+        } catch {}
+      }, sessionJsonStr);
+    }
+
     if (extractedToken) {
-      console.log("Extracted valid JanitorAI session JWT. Applying Bearer authorization header...");
+      console.log(`✓ Extracted valid JanitorAI session JWT (${extractedToken.substring(0, 16)}... len: ${extractedToken.length}).`);
+      console.log("✓ Applying Bearer authorization header to all browser and API requests...");
       await context.setExtraHTTPHeaders({
         Authorization: `Bearer ${extractedToken}`
       });
+    } else {
+      console.warn("⚠️ Could not extract Bearer JWT from provided JANITOR_COOKIE / JANITOR_TOKEN.");
     }
   } else {
     console.warn("⚠️ WARNING: No JANITOR_COOKIE or JANITOR_TOKEN detected in GitHub Secrets!");
