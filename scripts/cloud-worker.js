@@ -128,22 +128,53 @@ function extractCharactersFromPayload(obj, depth = 0, seen = new Set()) {
   }
 
   const msgsRaw =
+    obj.msgs ??
+    obj.messages ??
     obj.total_message ??
     obj.total_messages ??
     obj.totalMessages ??
+    obj.totalMessage ??
+    obj.stats?.msgs ??
     obj.stats?.message ??
     obj.stats?.messages ??
     obj.stats?.total_message ??
-    obj.message_count;
+    obj.stats?.total_messages ??
+    obj.message_count ??
+    obj.messageCount;
 
   const chatsRaw =
+    obj.chats ??
     obj.total_chat ??
     obj.total_chats ??
     obj.totalChats ??
-    obj.stats?.chat ??
+    obj.totalChat ??
     obj.stats?.chats ??
+    obj.stats?.chat ??
     obj.stats?.total_chat ??
-    obj.chat_count;
+    obj.stats?.total_chats ??
+    obj.chat_count ??
+    obj.chatCount;
+
+  const favsRaw =
+    obj.total_favorite ??
+    obj.total_favorites ??
+    obj.total_favourite ??
+    obj.total_favourites ??
+    obj.stats?.favorite ??
+    obj.stats?.favourite ??
+    obj.stats?.favorites ??
+    obj.stats?.favourites ??
+    obj.favourites ??
+    obj.favorites ??
+    obj.favorite;
+
+  const commsRaw =
+    obj.total_comment ??
+    obj.total_comments ??
+    obj.stats?.comment ??
+    obj.stats?.comments ??
+    obj.comments ??
+    obj.comment;
 
   const msgs = Number(msgsRaw);
   const chats = Number(chatsRaw);
@@ -204,8 +235,10 @@ function extractCharactersFromPayload(obj, depth = 0, seen = new Set()) {
   return results;
 }
 
-async function scrapeFollowingFeed(page) {
+async function scrapeFollowingFeed(context) {
   const capturedChars = [];
+  const page = await context.newPage();
+
   const onResponse = async (res) => {
     const u = res.url();
     if (u.includes("/characters") || u.includes("/hampter/")) {
@@ -232,14 +265,17 @@ async function scrapeFollowingFeed(page) {
     console.warn("[Worker] Warning navigating to Following feed:", err.message);
   } finally {
     page.off("response", onResponse);
+    await page.close().catch(() => {});
   }
 
   return capturedChars;
 }
 
-async function scrapeCharacterPage(page, characterId) {
+async function scrapeCharacterPage(context, characterId) {
   const cleanId = cleanUuid(characterId);
   if (!cleanId) return null;
+
+  const page = await context.newPage();
 
   // Navigate directly to character page with live network capture
   let captured = null;
@@ -273,72 +309,168 @@ async function scrapeCharacterPage(page, characterId) {
     } catch {}
   };
 
-  page.on("response", onResponse);
-
   try {
-    const url = `https://janitorai.com/characters/${cleanId}`;
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 });
-    await page.waitForTimeout(5000);
-  } catch (err) {
-    console.warn(`[Worker] Goto warning for ${cleanId}: ${err.message}`);
-  } finally {
-    page.off("response", onResponse);
-  }
+    page.on("response", onResponse);
 
-  // 3. Fallback: evaluate DOM, scripts, ribbons, and badges
-  if (!captured) {
     try {
-      captured = await page.evaluate((cid) => {
-        function parseStat(value) {
-          if (value == null) return null;
-          const text = String(value).trim().toLowerCase().replace(/,/g, "").replace(/\s+/g, "");
-          const match = text.match(/^([\d.]+)([kmb])?$/i);
-          if (!match) return null;
-          let number = Number(match[1]);
-          if (!Number.isFinite(number)) return null;
-          if (match[2] === "k") number *= 1e3;
-          if (match[2] === "m") number *= 1e6;
-          if (match[2] === "b") number *= 1e9;
-          return Math.round(number);
-        }
+      const url = `https://janitorai.com/characters/${cleanId}`;
+      const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 });
+      const status = resp ? resp.status() : 200;
+      if (status === 404) {
+        console.warn(`  [Worker] Character ${cleanId} returned 404 Not Found.`);
+        return null;
+      }
+      await page.waitForTimeout(5000);
+    } catch (err) {
+      console.warn(`[Worker] Goto warning for ${cleanId}: ${err.message}`);
+    } finally {
+      page.off("response", onResponse);
+    }
 
-        const h1 = document.querySelector("h1, h2.chakra-heading")?.innerText?.trim() || "JanitorAI Character";
-        const avatarEl = document.querySelector('img[src*="bot-avatars"], img[src*="characters"], .character-avatar img');
-        const creatorEl = document.querySelector('a[href*="/profiles/"], a[href^="/@"]');
-        const creator = creatorEl?.textContent?.replace(/^@|\s+/g, "") || null;
-
-        // 0. Primary regex matching on character title & metrics in text body
-        const fullText = document.body.innerText || "";
-        const mHero = fullText.match(/(?:^|\n)(.*?)\s+([\d.,kmbKMB]+)\s+([\d.,kmbKMB]+)\s+by:\s*@?([^\s\n]+)(?:\s+([\d.,kmbKMB]+))?/i);
-        if (mHero) {
-          const cChats = parseStat(mHero[2]);
-          const cMsgs = parseStat(mHero[3]);
-          const cFavs = mHero[5] ? parseStat(mHero[5]) : null;
-          if (cChats !== null && cMsgs !== null) {
-            return {
-              characterId: cid,
-              character_name: h1 || mHero[1].trim(),
-              avatar: avatarEl?.src || null,
-              creator: creator || mHero[4].trim(),
-              chats: cChats,
-              msgs: cMsgs,
-              favourites: cFavs,
-              comments: null,
-              publishedChats: null
-            };
+    // 3. Fallback: evaluate internal API, DOM text, scripts, ribbons, and badges
+    if (!captured) {
+      try {
+        captured = await page.evaluate(async (cid) => {
+          function parseStat(value) {
+            if (value == null) return null;
+            const text = String(value).trim().toLowerCase().replace(/,/g, "").replace(/\s+/g, "");
+            const match = text.match(/^([\d.]+)([kmb])?$/i);
+            if (!match) return null;
+            let number = Number(match[1]);
+            if (!Number.isFinite(number)) return null;
+            if (match[2] === "k") number *= 1e3;
+            if (match[2] === "m") number *= 1e6;
+            if (match[2] === "b") number *= 1e9;
+            return Math.round(number);
           }
-        }
 
-        // A. Check script tags for exact counts
-        for (const s of Array.from(document.querySelectorAll("script"))) {
-          const txt = s.textContent || "";
-          if (txt.includes("message") && txt.includes("chat")) {
-            const mMsg = txt.match(/"(?:total_)?messages?"\s*:\s*(\d+)/);
-            const mChat = txt.match(/"(?:total_)?chats?"\s*:\s*(\d+)/);
-            if (mMsg && mChat) {
-              const msgs = Number(mMsg[1]);
-              const chats = Number(mChat[1]);
-              if (Number.isFinite(msgs) && Number.isFinite(chats)) {
+          // A. Try internal first-party fetch from within origin
+          try {
+            let token = null;
+            try {
+              for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && (k.includes("auth-token") || k.includes("token"))) {
+                  const val = localStorage.getItem(k);
+                  const m = val?.match(/(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})/);
+                  if (m) { token = m[1]; break; }
+                }
+              }
+            } catch {}
+
+            const headers = { Accept: "application/json, text/plain, */*" };
+            if (token) headers["Authorization"] = `Bearer ${token}`;
+
+            const res = await fetch(`/hampter/characters/${cid}`, { credentials: "include", headers });
+            if (res.ok) {
+              const json = await res.json();
+              const c = json?.character || json?.data || json;
+              const msgsRaw = c?.total_message ?? c?.total_messages ?? c?.stats?.message ?? c?.stats?.total_message ?? c?.msgs ?? c?.messages;
+              const chatsRaw = c?.total_chat ?? c?.total_chats ?? c?.stats?.chat ?? c?.stats?.total_chat ?? c?.chats;
+              const favsRaw = c?.total_favorite ?? c?.total_favorites ?? c?.stats?.favorite ?? c?.favourites;
+              if (Number.isFinite(Number(msgsRaw)) && Number.isFinite(Number(chatsRaw))) {
+                return {
+                  characterId: cid,
+                  character_name: c.name || null,
+                  avatar: c.avatar || null,
+                  creator: c.creator || c.creator_name || null,
+                  chats: Number(chatsRaw),
+                  msgs: Number(msgsRaw),
+                  favourites: Number.isFinite(Number(favsRaw)) ? Number(favsRaw) : null,
+                  comments: null,
+                  publishedChats: null
+                };
+              }
+            }
+          } catch {}
+
+          const h1 = document.querySelector("h1, h2.chakra-heading")?.innerText?.trim() || "JanitorAI Character";
+          const avatarEl = document.querySelector('img[src*="bot-avatars"], img[src*="characters"], .character-avatar img');
+          const creatorEl = document.querySelector('a[href*="/profiles/"], a[href^="/@"]');
+          const creator = creatorEl?.textContent?.replace(/^@|\s+/g, "") || null;
+
+          // B. Primary regex matching on character title & metrics in text body
+          const fullText = document.body.innerText || "";
+          const mHero = fullText.match(/(?:^|\n)(.*?)\s+([\d.,kmbKMB]+)\s+([\d.,kmbKMB]+)\s+by:\s*@?([^\s\n]+)(?:\s+([\d.,kmbKMB]+))?/i);
+          if (mHero) {
+            const cChats = parseStat(mHero[2]);
+            const cMsgs = parseStat(mHero[3]);
+            const cFavs = mHero[5] ? parseStat(mHero[5]) : null;
+            if (cChats !== null && cMsgs !== null) {
+              return {
+                characterId: cid,
+                character_name: h1 && h1 !== "JanitorAI Character" ? h1 : mHero[1].trim(),
+                avatar: avatarEl?.src || null,
+                creator: creator || mHero[4].trim(),
+                chats: cChats,
+                msgs: cMsgs,
+                favourites: cFavs,
+                comments: null,
+                publishedChats: null
+              };
+            }
+          }
+
+          // C. Check __NEXT_DATA__
+          const nextEl = document.getElementById("__NEXT_DATA__");
+          if (nextEl) {
+            try {
+              const parsed = JSON.parse(nextEl.textContent);
+              const char = parsed.props?.pageProps?.character || parsed.props?.pageProps?.data || parsed.props?.pageProps?.bot;
+              if (char) {
+                const msgs = Number(char.total_message ?? char.total_messages ?? char.stats?.message);
+                const chats = Number(char.total_chat ?? char.total_chats ?? char.stats?.chat);
+                if (Number.isFinite(msgs) && Number.isFinite(chats)) {
+                  return {
+                    characterId: cid,
+                    character_name: char.name || h1,
+                    avatar: char.avatar || avatarEl?.src || null,
+                    creator: char.creator || creator,
+                    chats,
+                    msgs,
+                    favourites: null,
+                    comments: null,
+                    publishedChats: null
+                  };
+                }
+              }
+            } catch {}
+          }
+
+          // D. Check script tags for exact counts
+          for (const s of Array.from(document.querySelectorAll("script"))) {
+            const txt = s.textContent || "";
+            if (txt.includes("message") && txt.includes("chat")) {
+              const mMsg = txt.match(/"(?:total_)?messages?"\s*:\s*(\d+)/);
+              const mChat = txt.match(/"(?:total_)?chats?"\s*:\s*(\d+)/);
+              if (mMsg && mChat) {
+                const msgs = Number(mMsg[1]);
+                const chats = Number(mChat[1]);
+                if (Number.isFinite(msgs) && Number.isFinite(chats)) {
+                  return {
+                    characterId: cid,
+                    character_name: h1,
+                    avatar: avatarEl?.src || null,
+                    creator,
+                    chats,
+                    msgs,
+                    favourites: null,
+                    comments: null,
+                    publishedChats: null
+                  };
+                }
+              }
+            }
+          }
+
+          // E. Check ribbon (.character-chat-messages-stat-ribbon-tag-hstack)
+          const ribbon = document.querySelector(".character-chat-messages-stat-ribbon-tag-hstack");
+          if (ribbon) {
+            const pEls = Array.from(ribbon.querySelectorAll("p")).map(p => p.textContent.trim()).filter(Boolean);
+            if (pEls.length >= 2) {
+              const chats = parseStat(pEls[0]);
+              const msgs = parseStat(pEls[1]);
+              if (Number.isFinite(chats) && Number.isFinite(msgs)) {
                 return {
                   characterId: cid,
                   character_name: h1,
@@ -353,116 +485,95 @@ async function scrapeCharacterPage(page, characterId) {
               }
             }
           }
-        }
 
-        // B. Check ribbon (.character-chat-messages-stat-ribbon-tag-hstack)
-        const ribbon = document.querySelector(".character-chat-messages-stat-ribbon-tag-hstack");
-        if (ribbon) {
-          const pEls = Array.from(ribbon.querySelectorAll("p")).map(p => p.textContent.trim()).filter(Boolean);
-          if (pEls.length >= 2) {
-            const chats = parseStat(pEls[0]);
-            const msgs = parseStat(pEls[1]);
-            if (Number.isFinite(chats) && Number.isFinite(msgs)) {
-              return {
-                characterId: cid,
-                character_name: h1,
-                avatar: avatarEl?.src || null,
-                creator,
-                chats,
-                msgs,
-                favourites: null,
-                comments: null,
-                publishedChats: null
-              };
-            }
-          }
-        }
+          // F. Check stats elements & badges (using textContent for headless reliability)
+          const statsElements = Array.from(document.querySelectorAll("p, span, div, button, b, strong"))
+            .filter(el => el.children.length === 0 && el.textContent && el.textContent.trim());
 
-        // C. Check stats elements & badges (using textContent for headless reliability)
-        const statsElements = Array.from(document.querySelectorAll("p, span, div, button, b, strong"))
-          .filter(el => el.children.length === 0 && el.textContent && el.textContent.trim());
+          let domChats = null;
+          let domMsgs = null;
 
-        let domChats = null;
-        let domMsgs = null;
-
-        for (let i = 0; i < statsElements.length; i++) {
-          const el = statsElements[i];
-          const val = parseStat(el.textContent);
-          if (val !== null) {
-            const prev = statsElements[i - 1]?.textContent?.toLowerCase() || "";
-            const next = statsElements[i + 1]?.textContent?.toLowerCase() || "";
-            const parent = (el.parentElement?.textContent || "").toLowerCase();
-            
-            if (domChats === null && (parent.includes("chat") || prev.includes("chat") || next.includes("chat"))) {
-              domChats = val;
-            } else if (domMsgs === null && (parent.includes("msg") || parent.includes("message") || prev.includes("msg") || next.includes("msg"))) {
-              domMsgs = val;
-            }
-          }
-        }
-
-        // Fallback: If both chats and msgs are numbers found in order near the title
-        if (domChats === null || domMsgs === null) {
-          const numbers = [];
-          for (const el of statsElements) {
+          for (let i = 0; i < statsElements.length; i++) {
+            const el = statsElements[i];
             const val = parseStat(el.textContent);
-            if (val !== null && val > 0) numbers.push(val);
+            if (val !== null) {
+              const prev = statsElements[i - 1]?.textContent?.toLowerCase() || "";
+              const next = statsElements[i + 1]?.textContent?.toLowerCase() || "";
+              const parent = (el.parentElement?.textContent || "").toLowerCase();
+              
+              if (domChats === null && (parent.includes("chat") || prev.includes("chat") || next.includes("chat"))) {
+                domChats = val;
+              } else if (domMsgs === null && (parent.includes("msg") || parent.includes("message") || prev.includes("msg") || next.includes("msg"))) {
+                domMsgs = val;
+              }
+            }
           }
-          if (numbers.length >= 2) {
-            if (domChats === null) domChats = numbers[0];
-            if (domMsgs === null) domMsgs = numbers[1];
+
+          // Fallback: If both chats and msgs are numbers found in order near the title
+          if (domChats === null || domMsgs === null) {
+            const numbers = [];
+            for (const el of statsElements) {
+              const val = parseStat(el.textContent);
+              if (val !== null && val > 0) numbers.push(val);
+            }
+            if (numbers.length >= 2) {
+              if (domChats === null) domChats = numbers[0];
+              if (domMsgs === null) domMsgs = numbers[1];
+            }
           }
-        }
 
-        const favBtn = document.querySelector('button[title*="favorite" i], button[aria-label*="favorite" i]');
-        const favDisplay = favBtn?.parentElement?.querySelector('[class*="_number_"]')?.textContent;
-        const favCount = favDisplay ? parseStat(favDisplay) : null;
+          const favBtn = document.querySelector('button[title*="favorite" i], button[aria-label*="favorite" i]');
+          const favDisplay = favBtn?.parentElement?.querySelector('[class*="_number_"]')?.textContent;
+          const favCount = favDisplay ? parseStat(favDisplay) : null;
 
-        if (domChats !== null && domMsgs !== null) {
+          if (domChats !== null && domMsgs !== null) {
+            return {
+              characterId: cid,
+              character_name: h1,
+              avatar: avatarEl?.src || null,
+              creator,
+              chats: domChats,
+              msgs: domMsgs,
+              favourites: favCount,
+              comments: null,
+              publishedChats: null
+            };
+          }
+
+          return null;
+        }, cleanId);
+      } catch {}
+    }
+
+    if (captured) {
+      if (interceptedFavs !== null && (!captured.favourites || captured.favourites === 0)) {
+        captured.favourites = interceptedFavs;
+      }
+      if (interceptedReviews !== null && (!captured.comments || captured.comments === 0)) {
+        captured.comments = interceptedReviews;
+      }
+    }
+
+    if (!captured) {
+      try {
+        const diag = await page.evaluate(() => {
           return {
-            characterId: cid,
-            character_name: h1,
-            avatar: avatarEl?.src || null,
-            creator,
-            chats: domChats,
-            msgs: domMsgs,
-            favourites: favCount,
-            comments: null,
-            publishedChats: null
+            title: document.title,
+            url: location.href,
+            h1: document.querySelector("h1, h2")?.innerText?.trim() || "No heading",
+            bodyPreview: (document.body?.innerText || "").slice(0, 200).replace(/\n+/g, " ")
           };
-        }
-
-        return null;
-      }, cleanId);
-    } catch {}
-  }
-
-  if (captured) {
-    if (interceptedFavs !== null && (!captured.favourites || captured.favourites === 0)) {
-      captured.favourites = interceptedFavs;
+        });
+        console.warn(`  [Diag for ${cleanId}] Title: "${diag.title}" | H1: "${diag.h1}" | Body: "${diag.bodyPreview}"`);
+      } catch (e) {
+        console.warn(`  [Diag error for ${cleanId}]: ${e.message}`);
+      }
     }
-    if (interceptedReviews !== null && (!captured.comments || captured.comments === 0)) {
-      captured.comments = interceptedReviews;
-    }
-  }
 
-  if (!captured) {
-    try {
-      const diag = await page.evaluate(() => {
-        return {
-          title: document.title,
-          url: location.href,
-          h1: document.querySelector("h1, h2")?.innerText?.trim() || "No heading",
-          bodyPreview: (document.body?.innerText || "").slice(0, 200).replace(/\n+/g, " ")
-        };
-      });
-      console.warn(`  [Diag for ${cleanId}] Title: "${diag.title}" | H1: "${diag.h1}" | Body: "${diag.bodyPreview}"`);
-    } catch (e) {
-      console.warn(`  [Diag error for ${cleanId}]: ${e.message}`);
-    }
+    return captured;
+  } finally {
+    await page.close().catch(() => {});
   }
-
-  return captured;
 }
 
 async function checkWatchedCreators(page, watchedCreators, existingJobs) {
@@ -657,8 +768,6 @@ async function runWorker() {
     console.warn("⚠️ Please set JANITOR_COOKIE in GitHub: Repo Settings -> Secrets and variables -> Actions.");
   }
 
-  const page = await context.newPage();
-
   console.log(`Starting tracker loop (${MAX_CYCLES} cycles, ${CYCLE_DELAY_MS / 1000}s interval)...`);
 
   for (let cycle = 1; cycle <= MAX_CYCLES; cycle++) {
@@ -671,7 +780,7 @@ async function runWorker() {
     console.log(`Active tracking jobs: ${activeJobs.length} | Watched creators: ${watchedCreators.length}`);
 
     // 1. Scrape Following feed first for 1s-precision stats and minute-0 releases
-    const feedChars = await scrapeFollowingFeed(page);
+    const feedChars = await scrapeFollowingFeed(context);
     console.log(`[Worker] Following feed captured ${feedChars.length} characters with 1s-level precision.`);
 
     const handledIds = new Set();
@@ -714,7 +823,12 @@ async function runWorker() {
 
     // 2. Check profile pages of watched creators if specified
     if (watchedCreators.length > 0) {
-      await checkWatchedCreators(page, watchedCreators, allJobs);
+      const p = await context.newPage();
+      try {
+        await checkWatchedCreators(p, watchedCreators, allJobs);
+      } finally {
+        await p.close().catch(() => {});
+      }
     }
 
     // 3. For any active jobs not in the Following feed, scrape their direct character page
@@ -723,7 +837,7 @@ async function runWorker() {
       console.log(`[Worker] Scraping ${remainingJobs.length} standalone bots via direct character pages...`);
       for (const job of remainingJobs) {
         console.log(`[Worker] Scraping direct page: "${job.character_name}" (${job.character_id})`);
-        const scraped = await scrapeCharacterPage(page, job.character_id);
+        const scraped = await scrapeCharacterPage(context, job.character_id);
         if (scraped && Number.isFinite(scraped.chats) && Number.isFinite(scraped.msgs)) {
           await insertSnapshot(job.character_id, {
             chats: scraped.chats,
