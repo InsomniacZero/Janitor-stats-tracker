@@ -779,46 +779,24 @@ async function runWorker() {
 
     console.log(`Active tracking jobs: ${activeJobs.length} | Watched creators: ${watchedCreators.length}`);
 
-    // 1. Scrape Following feed first for 1s-precision stats and minute-0 releases
-    const feedChars = await scrapeFollowingFeed(context);
-    console.log(`[Worker] Following feed captured ${feedChars.length} characters with 1s-level precision.`);
-
-    const handledIds = new Set();
-    const existingJobSet = new Set(allJobs.map(j => cleanUuid(j.character_id)));
-
-    for (const char of feedChars) {
-      // Check if this character is one of our active tracked bots
-      const matchingJob = activeJobs.find(j => cleanUuid(j.character_id) === char.characterId);
-      if (matchingJob) {
-        await insertSnapshot(char.characterId, {
-          chats: char.chats,
-          msgs: char.msgs,
-          comments: char.comments,
-          favourites: char.favourites,
-          publishedChats: char.publishedChats
+    // 1. Scrape all active bots via direct stealth character pages
+    console.log(`[Worker] Scraping ${activeJobs.length} active bots via isolated character tabs...`);
+    for (const job of activeJobs) {
+      console.log(`[Worker] Scraping direct page: "${job.character_name}" (${job.character_id})`);
+      const scraped = await scrapeCharacterPage(context, job.character_id);
+      if (scraped && Number.isFinite(scraped.chats) && Number.isFinite(scraped.msgs)) {
+        await insertSnapshot(job.character_id, {
+          chats: scraped.chats,
+          msgs: scraped.msgs,
+          comments: scraped.comments,
+          favourites: scraped.favourites,
+          publishedChats: scraped.publishedChats
         });
-        handledIds.add(char.characterId);
-        console.log(`  ✓ Exact 1s snapshot logged: "${matchingJob.character_name}" -> ${char.chats.toLocaleString()} chats, ${char.msgs.toLocaleString()} msgs (from Following feed)`);
+        console.log(`  ✓ Direct snapshot logged: ${scraped.chats.toLocaleString()} chats, ${scraped.msgs.toLocaleString()} msgs (favs: ${scraped.favourites ?? 'n/a'}, likes: ${scraped.comments ?? 'n/a'})`);
+      } else {
+        console.log(`  ⚠ Could not collect fresh stats for ${job.character_id} (will retry next cycle).`);
       }
-
-      // Check watched creators for minute-0 releases
-      if (watchedCreators.length > 0 && !existingJobSet.has(char.characterId)) {
-        const isWatched = matchesWatchedCreator(char.creator, watchedCreators);
-        if (isWatched) {
-          console.log(`🚀 [Worker] NEW BOT DETECTED AT MINUTE 0: "${char.character_name}" by @${char.creator}! Auto-tracking...`);
-          existingJobSet.add(char.characterId);
-          await saveTrackedJob({
-            character_id: char.characterId,
-            character_name: char.character_name,
-            url: `https://janitorai.com/characters/${char.characterId}`,
-            avatar: char.avatar || null,
-            creator: char.creator,
-            status: "active",
-            started_at: new Date().toISOString(),
-            expires_at: new Date(Date.now() + 72 * 3600 * 1000).toISOString()
-          });
-        }
-      }
+      await sleep(2500);
     }
 
     // 2. Check profile pages of watched creators if specified
@@ -828,29 +806,6 @@ async function runWorker() {
         await checkWatchedCreators(p, watchedCreators, allJobs);
       } finally {
         await p.close().catch(() => {});
-      }
-    }
-
-    // 3. For any active jobs not in the Following feed, scrape their direct character page
-    const remainingJobs = activeJobs.filter(j => !handledIds.has(cleanUuid(j.character_id)));
-    if (remainingJobs.length > 0) {
-      console.log(`[Worker] Scraping ${remainingJobs.length} standalone bots via direct character pages...`);
-      for (const job of remainingJobs) {
-        console.log(`[Worker] Scraping direct page: "${job.character_name}" (${job.character_id})`);
-        const scraped = await scrapeCharacterPage(context, job.character_id);
-        if (scraped && Number.isFinite(scraped.chats) && Number.isFinite(scraped.msgs)) {
-          await insertSnapshot(job.character_id, {
-            chats: scraped.chats,
-            msgs: scraped.msgs,
-            comments: scraped.comments,
-            favourites: scraped.favourites,
-            publishedChats: scraped.publishedChats
-          });
-          console.log(`  ✓ Direct snapshot logged: ${scraped.chats.toLocaleString()} chats, ${scraped.msgs.toLocaleString()} msgs`);
-        } else {
-          console.log(`  ⚠ Could not collect fresh stats for ${job.character_id} (will retry next cycle).`);
-        }
-        await sleep(3500);
       }
     }
 
