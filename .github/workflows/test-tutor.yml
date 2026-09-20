@@ -91,8 +91,54 @@ jobs:
 
             console.log("HTTP Status:", resp.status());
             console.log("Title:", await page.title());
-            const text = await page.evaluate(() => document.body.innerText);
-            console.log("Body preview:", text.substring(0, 400).replace(/\n+/g, " "));
+
+            const extracted = await page.evaluate(() => {
+              function parseStat(value) {
+                if (value == null) return null;
+                const text = String(value).trim().toLowerCase().replace(/,/g, "").replace(/\s+/g, "");
+                const match = text.match(/^([\d.]+)([kmb])?$/i);
+                if (!match) return null;
+                let number = Number(match[1]);
+                if (!Number.isFinite(number)) return null;
+                if (match[2] === "k") number *= 1e3;
+                if (match[2] === "m") number *= 1e6;
+                if (match[2] === "b") number *= 1e9;
+                return Math.round(number);
+              }
+
+              // 1. Check __NEXT_DATA__
+              let nextStats = null;
+              const nextEl = document.getElementById("__NEXT_DATA__");
+              if (nextEl) {
+                try {
+                  const parsed = JSON.parse(nextEl.textContent);
+                  const char = parsed.props?.pageProps?.character || parsed.props?.pageProps?.data || parsed.props?.pageProps?.bot;
+                  if (char) {
+                    nextStats = {
+                      source: "__NEXT_DATA__",
+                      name: char.name,
+                      chats: char.total_chat ?? char.total_chats ?? char.stats?.chat,
+                      msgs: char.total_message ?? char.total_messages ?? char.stats?.message,
+                      rawChar: Object.keys(char)
+                    };
+                  }
+                } catch (e) {
+                  nextStats = { error: e.message };
+                }
+              }
+
+              // 2. Check DOM text
+              const text = document.body.innerText || "";
+              const m = text.match(/Horny Private Tutor\s+([\d.,kmbKMB]+)\s+([\d.,kmbKMB]+)\s+by:\s*@?([^\s]+)\s+([\d.,]+)/);
+
+              return {
+                nextStats,
+                domRegexMatch: m ? { chats: parseStat(m[1]), msgs: parseStat(m[2]), creator: m[3], favs: parseStat(m[4]) } : null,
+                bodySnippet: text.substring(0, 300).replace(/\n+/g, " ")
+              };
+            });
+
+            console.log("EXTRACTED STATS:", JSON.stringify(extracted, null, 2));
 
             await browser.close();
           });
