@@ -1,0 +1,98 @@
+name: Test Direct Scrape All Bots
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Playwright
+        run: |
+          npm install playwright
+          npx playwright install --with-deps chromium
+      - name: Run Test Scrape
+        env:
+          JANITOR_COOKIE: ${{ secrets.JANITOR_COOKIE }}
+        run: |
+          node -e '
+          import("playwright").then(async ({ chromium }) => {
+            const rawCookie = process.env.JANITOR_COOKIE || "";
+            const browser = await chromium.launch({
+              headless: true,
+              args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled"
+              ]
+            });
+            const context = await browser.newContext({
+              userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+              locale: "en-US",
+              extraHTTPHeaders: {
+                "Accept-Language": "en-US,en;q=0.9",
+                "sec-ch-ua": "\"Chromium\";v=\"128\", \"Not;A=Brand\";v=\"24\", \"Google Chrome\";v=\"128\"",
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": "\"Windows\""
+              }
+            });
+            await context.addInitScript(() => {
+              Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+              window.chrome = { runtime: {} };
+            });
+
+            if (rawCookie) {
+              const cookiesToAdd = [];
+              for (const part of rawCookie.split(";")) {
+                const [k, ...v] = part.trim().split("=");
+                if (k && v.length) {
+                  cookiesToAdd.push({ name: k, value: v.join("="), domain: ".janitorai.com", path: "/" });
+                }
+              }
+              await context.addCookies(cookiesToAdd);
+            }
+
+            const bots = [
+              { id: "895c6961-c428-4e8b-86fb-a51caf35f89a", name: "Horny Private Tutor" },
+              { id: "03f5513b-3bb3-4134-8aee-803f0399486c", name: "Stepsister" },
+              { id: "7ea620fc-3b04-4ae1-ab15-9a749685ca81", name: "Kneel" },
+              { id: "de10694c-c407-45d6-99c4-110569121781", name: "Your bully" },
+              { id: "e7ce009c-0f80-4279-a16f-044e9aab63a4", name: "FREE Proxy Guide" },
+              { id: "23df7d2e-5f25-4e17-b768-6451c80bd36f", name: "Virgin" },
+              { id: "5cdf4c4b-6b2c-4ab1-b6e2-18d147b30690", name: "Framed" }
+            ];
+
+            for (const bot of bots) {
+              console.log(`\nTesting direct bot scrape: ${bot.name} (${bot.id})...`);
+              const page = await context.newPage();
+              try {
+                const resp = await page.goto(`https://janitorai.com/characters/${bot.id}`, { waitUntil: "domcontentloaded", timeout: 25000 });
+                await page.waitForTimeout(4000);
+                const title = await page.title();
+                const status = resp ? resp.status() : "no resp";
+                console.log(`  -> Status: ${status} | Title: "${title}"`);
+                
+                const stats = await page.evaluate((cid) => {
+                  const fullText = document.body.innerText || "";
+                  const mHero = fullText.match(/(?:^|\n)(.*?)\s+([\d.,kmbKMB]+)\s+([\d.,kmbKMB]+)\s+by:\s*@?([^\s\n]+)(?:\s+([\d.,kmbKMB]+))?/i);
+                  return {
+                    matched: mHero ? { title: mHero[1], chats: mHero[2], msgs: mHero[3], creator: mHero[4] } : null,
+                    bodySnippet: fullText.substring(0, 150).replace(/\n+/g, " ")
+                  };
+                }, bot.id);
+                console.log("  -> Extracted:", JSON.stringify(stats));
+              } catch (e) {
+                console.log(`  -> Error: ${e.message}`);
+              } finally {
+                await page.close();
+              }
+              await new Promise(r => setTimeout(r, 2000));
+            }
+
+            await browser.close();
+          });
+          '
