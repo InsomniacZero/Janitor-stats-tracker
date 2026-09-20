@@ -216,6 +216,7 @@ async function scrapeFollowingFeed(page) {
           const found = extractCharactersFromPayload(json);
           if (found.length > 0) {
             capturedChars.push(...found);
+            console.log(`  [Worker] Intercepted feed response (${u.substring(0, 70)}...): extracted ${found.length} characters.`);
           }
         }
       } catch {}
@@ -226,7 +227,7 @@ async function scrapeFollowingFeed(page) {
   try {
     console.log("[Worker] Navigating to Following feed (https://janitorai.com/?segment=following) for 1s-precision stats...");
     await page.goto("https://janitorai.com/?segment=following", { waitUntil: "domcontentloaded", timeout: 25000 });
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(6000);
   } catch (err) {
     console.warn("[Worker] Warning navigating to Following feed:", err.message);
   } finally {
@@ -242,17 +243,34 @@ async function scrapeCharacterPage(page, characterId) {
 
   // Navigate directly to character page with live network capture
   let captured = null;
+  let interceptedFavs = null;
+  let interceptedReviews = null;
+
   const onResponse = async (res) => {
     const u = res.url();
-    if (u.includes(cleanId) || u.includes("/characters/")) {
-      try {
+    try {
+      if (u.includes(cleanId) || u.includes("/characters/")) {
         const text = await res.text();
         const json = JSON.parse(text);
         const chars = extractCharactersFromPayload(json);
         const match = chars.find(c => c.characterId === cleanId);
         if (match) captured = match;
-      } catch {}
-    }
+      }
+      if (u.includes("/hampter/favorites/character/") && u.includes("/count")) {
+        const text = await res.text();
+        const json = JSON.parse(text);
+        if (Number.isFinite(json.favoritesCount)) {
+          interceptedFavs = json.favoritesCount;
+        }
+      }
+      if (u.includes("/hampter/reviews/counts/")) {
+        const text = await res.text();
+        const json = JSON.parse(text);
+        if (Number.isFinite(json.total)) {
+          interceptedReviews = json.total;
+        }
+      }
+    } catch {}
   };
 
   page.on("response", onResponse);
@@ -260,7 +278,7 @@ async function scrapeCharacterPage(page, characterId) {
   try {
     const url = `https://janitorai.com/characters/${cleanId}`;
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 });
-    await page.waitForTimeout(4000);
+    await page.waitForTimeout(5000);
   } catch (err) {
     console.warn(`[Worker] Goto warning for ${cleanId}: ${err.message}`);
   } finally {
@@ -288,6 +306,28 @@ async function scrapeCharacterPage(page, characterId) {
         const avatarEl = document.querySelector('img[src*="bot-avatars"], img[src*="characters"], .character-avatar img');
         const creatorEl = document.querySelector('a[href*="/profiles/"], a[href^="/@"]');
         const creator = creatorEl?.textContent?.replace(/^@|\s+/g, "") || null;
+
+        // 0. Primary regex matching on character title & metrics in text body
+        const fullText = document.body.innerText || "";
+        const mHero = fullText.match(/(?:^|\n)(.*?)\s+([\d.,kmbKMB]+)\s+([\d.,kmbKMB]+)\s+by:\s*@?([^\s\n]+)(?:\s+([\d.,kmbKMB]+))?/i);
+        if (mHero) {
+          const cChats = parseStat(mHero[2]);
+          const cMsgs = parseStat(mHero[3]);
+          const cFavs = mHero[5] ? parseStat(mHero[5]) : null;
+          if (cChats !== null && cMsgs !== null) {
+            return {
+              characterId: cid,
+              character_name: h1 || mHero[1].trim(),
+              avatar: avatarEl?.src || null,
+              creator: creator || mHero[4].trim(),
+              chats: cChats,
+              msgs: cMsgs,
+              favourites: cFavs,
+              comments: null,
+              publishedChats: null
+            };
+          }
+        }
 
         // A. Check script tags for exact counts
         for (const s of Array.from(document.querySelectorAll("script"))) {
@@ -395,6 +435,15 @@ async function scrapeCharacterPage(page, characterId) {
         return null;
       }, cleanId);
     } catch {}
+  }
+
+  if (captured) {
+    if (interceptedFavs !== null && (!captured.favourites || captured.favourites === 0)) {
+      captured.favourites = interceptedFavs;
+    }
+    if (interceptedReviews !== null && (!captured.comments || captured.comments === 0)) {
+      captured.comments = interceptedReviews;
+    }
   }
 
   if (!captured) {
@@ -522,41 +571,18 @@ async function runWorker() {
   }
   console.log(`Connected to Supabase: ${config.url}`);
 
-  let execPath;
-  try {
-    const fs = await import("fs");
-    const candidates = [
-      process.env.CHROMIUM_PATH,
-      "/usr/bin/google-chrome",
-      "/usr/bin/chromium-browser",
-      "/usr/bin/chromium",
-      "/home/insomniac/.cache/ms-playwright/chromium-1148/chrome-linux/chrome"
-    ].filter(Boolean);
-    for (const c of candidates) {
-      if (fs.existsSync(c)) {
-        execPath = c;
-        break;
-      }
-    }
-  } catch {}
-
-  console.log(`Launching Chromium (path: ${execPath || "Playwright default"})...`);
+  console.log("Launching Chromium with Playwright stealth patches...");
   const browser = await chromium.launch({
     headless: true,
-    executablePath: execPath,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
-      "--disable-blink-features=AutomationControlled",
-      "--disable-infobars",
-      "--disable-dev-shm-usage",
-      "--disable-gpu"
+      "--disable-blink-features=AutomationControlled"
     ]
   });
 
   const context = await browser.newContext({
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    viewport: { width: 1920, height: 1080 },
     locale: "en-US",
     extraHTTPHeaders: {
       "Accept-Language": "en-US,en;q=0.9",
@@ -632,15 +658,6 @@ async function runWorker() {
   }
 
   const page = await context.newPage();
-
-  console.log("Establishing initial browser session with https://janitorai.com/ ...");
-  try {
-    await page.goto("https://janitorai.com/", { waitUntil: "domcontentloaded", timeout: 25000 });
-    await page.waitForTimeout(3000);
-    console.log(`Initial session established. Page title: "${await page.title()}"`);
-  } catch (err) {
-    console.warn("Initial session load warning:", err.message);
-  }
 
   console.log(`Starting tracker loop (${MAX_CYCLES} cycles, ${CYCLE_DELAY_MS / 1000}s interval)...`);
 
@@ -719,6 +736,7 @@ async function runWorker() {
         } else {
           console.log(`  ⚠ Could not collect fresh stats for ${job.character_id} (will retry next cycle).`);
         }
+        await sleep(3500);
       }
     }
 
