@@ -1,0 +1,57 @@
+name: Test Scrape
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Playwright
+        run: |
+          npm install playwright
+          npx playwright install --with-deps chromium
+      - name: Run Test Scrape
+        run: |
+          node -e '
+          import("playwright").then(async ({ chromium }) => {
+            const browser = await chromium.launch({
+              headless: true,
+              args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled"
+              ]
+            });
+            const context = await browser.newContext({
+              userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+              locale: "en-US",
+              extraHTTPHeaders: {
+                "Accept-Language": "en-US,en;q=0.9",
+                "sec-ch-ua": "\"Chromium\";v=\"128\", \"Not;A=Brand\";v=\"24\", \"Google Chrome\";v=\"128\"",
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": "\"Windows\""
+              }
+            });
+            await context.addInitScript(() => {
+              Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+              window.chrome = { runtime: {} };
+            });
+
+            const page = await context.newPage();
+            console.log("Navigating to character page directly...");
+            const resp = await page.goto("https://janitorai.com/characters/e7ce009c-0f80-4279-a16f-044e9aab63a4", { waitUntil: "domcontentloaded", timeout: 25000 });
+            await page.waitForTimeout(4000);
+
+            console.log("HTTP Status:", resp.status());
+            console.log("Title:", await page.title());
+            const text = await page.evaluate(() => document.body.innerText);
+            console.log("Body preview:", text.substring(0, 300).replace(/\n+/g, " "));
+
+            await browser.close();
+          });
+          '
