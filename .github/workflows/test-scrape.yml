@@ -16,9 +16,12 @@ jobs:
           npm install playwright
           npx playwright install --with-deps chromium
       - name: Run Test Scrape
+        env:
+          JANITOR_COOKIE: ${{ secrets.JANITOR_COOKIE }}
         run: |
           node -e '
           import("playwright").then(async ({ chromium }) => {
+            const rawCookie = process.env.JANITOR_COOKIE || "";
             const browser = await chromium.launch({
               headless: true,
               args: [
@@ -42,10 +45,36 @@ jobs:
               window.chrome = { runtime: {} };
             });
 
+            if (rawCookie) {
+              const cookiesToAdd = [];
+              for (const part of rawCookie.split(";")) {
+                const [k, ...v] = part.trim().split("=");
+                if (k && v.length) {
+                  cookiesToAdd.push({ name: k, value: v.join("="), domain: ".janitorai.com", path: "/" });
+                }
+              }
+              await context.addCookies(cookiesToAdd);
+
+              const m0 = rawCookie.match(/sb-auth-auth-token\.0=([^;]+)/);
+              const m1 = rawCookie.match(/sb-auth-auth-token\.1=([^;]+)/);
+              if (m0 && m1) {
+                try {
+                  const combined = (m0[1] + m1[1]).replace(/^base64-/, "");
+                  const decoded = Buffer.from(combined, "base64").toString("utf8");
+                  await context.addInitScript((sStr) => {
+                    try {
+                      window.localStorage.setItem("sb-auth-auth-token", sStr);
+                      window.localStorage.setItem("sb-mcmzxtzhmmmpnyhreddbo-auth-token", sStr);
+                    } catch {}
+                  }, decoded);
+                } catch {}
+              }
+            }
+
             const page = await context.newPage();
             console.log("Navigating to character page directly...");
             const resp = await page.goto("https://janitorai.com/characters/e7ce009c-0f80-4279-a16f-044e9aab63a4", { waitUntil: "domcontentloaded", timeout: 25000 });
-            await page.waitForTimeout(4000);
+            await page.waitForTimeout(5000);
 
             console.log("HTTP Status:", resp.status());
             console.log("Title:", await page.title());
