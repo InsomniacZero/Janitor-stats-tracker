@@ -9,36 +9,34 @@ on:
 
 concurrency:
   group: jstats-tracker-worker
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   track:
     name: Run Autonomous Tracker Sweep
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js (v20)
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
-      - name: Install Node Dependencies
-        run: npm ci || npm install
-
-      - name: Install Playwright Chromium Browser
-        run: npx playwright install --with-deps chromium
+      - name: Install Playwright
+        run: |
+          npm install playwright
+          npx playwright install --with-deps chromium
 
       - name: Execute Autonomous Cloud Worker
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://vclvynlyfylnjcjvyrfy.supabase.co' }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || 'sb_publishable_zQ5xfP0Ok8sV6tCVAqLQbQ_EWpAOs7G' }}
-          JANITOR_TOKEN: ${{ secrets.JANITOR_TOKEN }}
           JANITOR_COOKIE: ${{ secrets.JANITOR_COOKIE }}
-          MAX_CYCLES: 8
-          CYCLE_DELAY_MS: 60000
+          MAX_CYCLES: 1
+          CYCLE_DELAY_MS: 5000
         run: node scripts/cloud-worker.js
+
