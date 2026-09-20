@@ -72,9 +72,22 @@ jobs:
             }
 
             const page = await context.newPage();
-            console.log("Navigating to character page directly...");
-            const resp = await page.goto("https://janitorai.com/characters/e7ce009c-0f80-4279-a16f-044e9aab63a4", { waitUntil: "domcontentloaded", timeout: 25000 });
-            await page.waitForTimeout(5000);
+            page.on("response", async (res) => {
+              const u = res.url();
+              if (u.includes("/characters") || u.includes("/hampter/")) {
+                console.log(`[API ${res.status()}] ${u.substring(0, 100)}`);
+                try {
+                  const text = await res.text();
+                  if (text.startsWith("{") || text.startsWith("[")) {
+                    console.log("-> JSON length:", text.length, "Preview:", text.substring(0, 150));
+                  }
+                } catch {}
+              }
+            });
+
+            console.log("Navigating to https://janitorai.com/?segment=following ...");
+            const resp = await page.goto("https://janitorai.com/?segment=following", { waitUntil: "domcontentloaded", timeout: 25000 });
+            await page.waitForTimeout(6000);
 
             console.log("HTTP Status:", resp.status());
             console.log("Title:", await page.title());
