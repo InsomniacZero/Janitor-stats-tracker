@@ -34,17 +34,31 @@ CREATE TABLE IF NOT EXISTS character_snapshots (
 );
 
 -- 3. High-Performance Time-Series Indexes
-CREATE INDEX IF NOT EXISTS idx_snapshots_char_time 
+CREATE INDEX IF NOT EXISTS idx_snapshots_char_time
   ON character_snapshots(character_id, timestamp DESC);
 
-CREATE INDEX IF NOT EXISTS idx_jobs_status_expires 
+CREATE INDEX IF NOT EXISTS idx_jobs_status_expires
   ON tracked_jobs(status, expires_at);
+
+-- Prevents duplicate rows when a retried/overlapping write repeats the exact
+-- same (character_id, timestamp) pair. Paired with on_conflict + Prefer:
+-- resolution=ignore-duplicates in supabase.js's insertSnapshot().
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_char_ts_unique
+  ON character_snapshots(character_id, timestamp);
 
 -- 4. Enable Row Level Security (RLS)
 ALTER TABLE tracked_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE character_snapshots ENABLE ROW LEVEL SECURITY;
 
 -- 5. Open Public/Anon Policies (Allows web dashboard & extension direct access)
+-- SECURITY NOTE: there is no auth/ownership model in this app — every anon-key
+-- holder can read, insert, update, and delete every row in these tables. That's
+-- fine for a private, single-user Supabase project, but it means the bundled
+-- DEFAULT_SUPABASE_URL/DEFAULT_SUPABASE_ANON_KEY (in supabase.js and
+-- .env.example) point at a *shared public* database — anyone who reads this
+-- public repo can wipe or tamper with data in it. Run this schema in your own
+-- Supabase project and configure SUPABASE_URL/SUPABASE_ANON_KEY (or the
+-- dashboard's Cloud Sync UI) if you don't want your tracking data public.
 CREATE POLICY "Allow anon read tracked_jobs" 
   ON tracked_jobs FOR SELECT TO anon, authenticated USING (true);
 
