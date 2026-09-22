@@ -14,7 +14,47 @@ function cleanUrl(raw) {
     .replace(/\/rest\/v1\/?$/, "");
 }
 
+/**
+ * Retries transient network failures and 5xx responses for write requests.
+ * 4xx responses are returned immediately since retrying won't help.
+ */
+async function fetchWithRetry(url, options, { retries = 2, delayMs = 400 } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok || res.status < 500) return res;
+      lastErr = new Error(`HTTP ${res.status}: ${res.statusText}`);
+    } catch (err) {
+      lastErr = err;
+    }
+    if (attempt < retries) {
+      await new Promise(r => setTimeout(r, delayMs * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+let warnedDefaultCredentials = false;
+function warnIfDefaultCredentials(config) {
+  if (warnedDefaultCredentials) return;
+  if (config?.url === cleanUrl(DEFAULT_SUPABASE_URL) && config?.anonKey === DEFAULT_SUPABASE_ANON_KEY.trim()) {
+    warnedDefaultCredentials = true;
+    console.warn(
+      "JStats: using the bundled default Supabase project. This database is shared and " +
+      "publicly writable/deletable by anyone with this repo's anon key. Configure your own " +
+      "Supabase project (Cloud Sync in the dashboard, or SUPABASE_URL/SUPABASE_ANON_KEY) to keep your data private."
+    );
+  }
+}
+
 export async function getSupabaseConfig() {
+  const config = await resolveSupabaseConfig();
+  if (config) warnIfDefaultCredentials(config);
+  return config;
+}
+
+async function resolveSupabaseConfig() {
   if (typeof process !== "undefined" && process.env?.SUPABASE_URL && process.env?.SUPABASE_ANON_KEY) {
     return {
       url: cleanUrl(process.env.SUPABASE_URL),
@@ -215,7 +255,7 @@ export async function saveTrackedJob(job) {
   };
 
   try {
-    const res = await fetch(`${config.url}/rest/v1/tracked_jobs`, {
+    const res = await fetchWithRetry(`${config.url}/rest/v1/tracked_jobs`, {
       method: "POST",
       headers: {
         apikey: config.anonKey,
@@ -269,7 +309,7 @@ export async function updateTrackedJobMetadata(characterId, { avatar, creator })
       ? `${baseUrl}#meta=${encodeURIComponent(JSON.stringify(metaObj))}`
       : baseUrl;
 
-    const patchRes = await fetch(`${config.url}/rest/v1/tracked_jobs?character_id=eq.${encodeURIComponent(characterId)}`, {
+    const patchRes = await fetchWithRetry(`${config.url}/rest/v1/tracked_jobs?character_id=eq.${encodeURIComponent(characterId)}`, {
       method: "PATCH",
       headers: {
         apikey: config.anonKey,
@@ -342,12 +382,14 @@ export async function insertSnapshot(characterId, snapshot) {
   };
 
   try {
-    const res = await fetch(`${config.url}/rest/v1/character_snapshots`, {
+    const res = await fetchWithRetry(`${config.url}/rest/v1/character_snapshots?on_conflict=character_id,timestamp`, {
       method: "POST",
       headers: {
         apikey: config.anonKey,
         Authorization: `Bearer ${config.anonKey}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        // Silently no-op exact (character_id, timestamp) duplicates instead of erroring/duplicating.
+        Prefer: "resolution=ignore-duplicates"
       },
       body: JSON.stringify(payload)
     });
@@ -530,7 +572,7 @@ export async function updateTrackedJobStatus(characterId, status) {
   if (!config) return false;
 
   try {
-    const res = await fetch(`${config.url}/rest/v1/tracked_jobs?character_id=eq.${encodeURIComponent(characterId)}`, {
+    const res = await fetchWithRetry(`${config.url}/rest/v1/tracked_jobs?character_id=eq.${encodeURIComponent(characterId)}`, {
       method: "PATCH",
       headers: {
         apikey: config.anonKey,
@@ -555,7 +597,7 @@ export async function deleteTrackedJob(characterId) {
   if (!config) return false;
 
   try {
-    const res = await fetch(`${config.url}/rest/v1/tracked_jobs?character_id=eq.${encodeURIComponent(characterId)}`, {
+    const res = await fetchWithRetry(`${config.url}/rest/v1/tracked_jobs?character_id=eq.${encodeURIComponent(characterId)}`, {
       method: "DELETE",
       headers: {
         apikey: config.anonKey,
@@ -603,7 +645,7 @@ export async function addWatchedCreatorToSupabase(creatorHandle) {
   if (!config) return false;
 
   try {
-    const res = await fetch(`${config.url}/rest/v1/watched_creators`, {
+    const res = await fetchWithRetry(`${config.url}/rest/v1/watched_creators`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -631,7 +673,7 @@ export async function removeWatchedCreatorFromSupabase(creatorHandle) {
   if (!config) return false;
 
   try {
-    const res = await fetch(`${config.url}/rest/v1/watched_creators?creator_handle=eq.${encodeURIComponent(creatorHandle)}`, {
+    const res = await fetchWithRetry(`${config.url}/rest/v1/watched_creators?creator_handle=eq.${encodeURIComponent(creatorHandle)}`, {
       method: "DELETE",
       headers: {
         apikey: config.anonKey,
@@ -675,11 +717,14 @@ CREATE TABLE IF NOT EXISTS watched_creators (
   added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_snapshots_char_time 
+CREATE INDEX IF NOT EXISTS idx_snapshots_char_time
   ON character_snapshots(character_id, timestamp DESC);
 
-CREATE INDEX IF NOT EXISTS idx_jobs_status_expires 
+CREATE INDEX IF NOT EXISTS idx_jobs_status_expires
   ON tracked_jobs(status, expires_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_char_ts_unique
+  ON character_snapshots(character_id, timestamp);
 
 ALTER TABLE tracked_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE character_snapshots ENABLE ROW LEVEL SECURITY;

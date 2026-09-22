@@ -4,6 +4,7 @@
   "description": "Tracker and analytics dashboard for JanitorAI character statistics (Vercel web app & Chrome Extension)",
   "type": "module",
   "scripts": {
+    "init": "bash init.sh",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
